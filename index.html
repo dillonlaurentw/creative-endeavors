@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Creative Endeavors">
+<title>Creative Endeavors</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500&display=swap">
+<style>
+/* Layout: a blank page. Name top-left, the quote alone in the middle, one line at the foot. */
+:root {
+  --bg: #ffffff;
+  --fg: #111111;
+  --muted: #8a8a8a;
+  --sans: "Instrument Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #0d0d0d; --fg: #ededed; --muted: #7a7a7a; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #0d0d0d; --fg: #ededed; --muted: #7a7a7a; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.page {
+  min-height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  padding-block: 32px;
+  padding-left: max(32px, env(safe-area-inset-left, 0px));
+  padding-right: max(32px, env(safe-area-inset-right, 0px));
+}
+.name {
+  margin: 0;
+  font-weight: 500;
+  font-size: 15px;
+}
+main {
+  align-self: center;
+  justify-self: center;
+  width: 100%;
+  max-width: 34rem;
+  padding-block: 96px;
+}
+blockquote {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+blockquote p { margin: 0; }
+cite {
+  display: block;
+  margin-top: 20px;
+  font-style: normal;
+  color: var(--muted);
+}
+footer {
+  color: var(--muted);
+  font-size: 13px;
+}
+@media (max-width: 480px) {
+  .page {
+    padding-block: 24px;
+    padding-left: max(20px, env(safe-area-inset-left, 0px));
+    padding-right: max(20px, env(safe-area-inset-right, 0px));
+  }
+  main { padding-block: 64px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <header><p class="name">Creative Endeavors</p></header>
+  <main>
+    <blockquote>
+      <p>&ldquo;If I put this candle in an all-white gallery space, it looks like a piece of art. If I put this candle in a garage, it looks like a piece of trash. I can either spend my time designing the candle or I can spend my time designing the room that it sits in.&rdquo;</p>
+      <cite>Virgil Abloh</cite>
+    </blockquote>
+  </main>
+  <footer>&copy; 2026 Creative Endeavors</footer>
+</div>
+</body>
+</html>
