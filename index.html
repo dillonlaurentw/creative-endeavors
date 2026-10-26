@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500&display=swap">
 <style>
-/* Layout: a blank page. Name top-left, the quote alone in the middle, one line at the foot. */
+/* Layout: a blank page. Name top-left, email top-right, the quote alone in the middle, one line at the foot. */
 :root {
   --bg: #ffffff;
   --fg: #111111;
@@ -45,6 +45,20 @@ body {
   font-weight: 500;
   font-size: 15px;
 }
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  white-space: nowrap;
+}
+.email {
+  color: var(--fg);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.email:hover, .email:focus-visible { color: var(--muted); }
 main {
   align-self: center;
   justify-self: center;
@@ -76,12 +90,17 @@ footer {
     padding-right: max(20px, env(safe-area-inset-right, 0px));
   }
   main { padding-block: 64px; }
+  header { font-size: 14px; column-gap: 12px; }
+  .name { font-size: inherit; }
 }
 </style>
 </head>
 <body>
 <div class="page">
-  <header><p class="name">Creative Endeavors</p></header>
+  <header>
+    <p class="name">Creative Endeavors</p>
+    <a class="email" href="mailto:hello@creativeendeavors.xyz">hello@creativeendeavors.xyz</a>
+  </header>
   <main>
     <blockquote>
       <p>&ldquo;If I put this candle in an all-white gallery space, it looks like a piece of art. If I put this candle in a garage, it looks like a piece of trash. I can either spend my time designing the candle or I can spend my time designing the room that it sits in.&rdquo;</p>
