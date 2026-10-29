@@ -8,7 +8,11 @@
 <meta name="description" content="Creative Endeavors is an independent organization founded on the belief that creativity is fundamental to shaping the future of business, technology, and culture.">
 <meta property="og:title" content="Creative Endeavors">
 <meta property="og:description" content="Creative Endeavors is an independent organization founded on the belief that creativity is fundamental to shaping the future of business, technology, and culture.">
-<meta property="og:url" content="https://creativeendeavors.xyz">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Creative Endeavors">
+<meta property="og:url" content="https://creativeendeavors.xyz/">
+<meta name="twitter:card" content="summary">
+<link rel="canonical" href="https://creativeendeavors.xyz/">
 <title>Creative Endeavors</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,8 +22,7 @@
 :root {
   --bg: #ffffff;
   --fg: #111111;
-  --muted: #8a8a8a;
-  --rule: #e6e6e6;
+  --muted: #6e6e6e;
   --sans: "Instrument Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
   color-scheme: light;
 }
@@ -62,6 +65,7 @@ a {
   transition: color 0.15s ease;
 }
 a:hover, a:focus-visible { color: var(--muted); }
+a:focus-visible { outline: 1px solid currentColor; outline-offset: 3px; }
 main {
   align-self: center;
   justify-self: center;
@@ -71,6 +75,7 @@ main {
 }
 .lede {
   margin: 0;
+  font-family: inherit;
   font-size: 22px;
   font-weight: 500;
   line-height: 1.35;
@@ -92,6 +97,18 @@ footer .epigraph {
   font-style: italic;
   text-wrap: pretty;
 }
+/* Larger screens get larger middle text; the column grows with it to keep lines about 65-70 characters. */
+@media (min-width: 768px) {
+  main { max-width: 32rem; }
+  .lede { font-size: 24px; }
+  .intro { font-size: 16px; line-height: 1.55; }
+}
+@media (min-width: 1024px) {
+  main { max-width: 34rem; }
+  .lede { font-size: 28px; letter-spacing: -0.015em; }
+  .intro { margin-top: 18px; font-size: 17px; }
+  .lede + .intro { margin-top: 24px; }
+}
 @media (max-width: 480px) {
   .page {
     padding-block: 24px;
@@ -111,7 +128,7 @@ footer .epigraph {
     <a href="mailto:hello@creativeendeavors.xyz">hello@creativeendeavors.xyz</a>
   </header>
   <main>
-    <p class="lede">A think tank for creatives.</p>
+    <h1 class="lede">A think tank for creatives.</h1>
     <p class="intro">Creative Endeavors is an independent organization founded on the belief that creativity is fundamental to shaping the future of business, technology, and culture.</p>
     <p class="intro">We bring together individuals who challenge convention, pursue original ideas, and see entrepreneurship as a form of creative expression.</p>
     <p class="intro">Through community, curated experiences, and entrepreneurial initiatives, Creative Endeavors creates opportunities for people, ideas, and resources to come together.</p>
