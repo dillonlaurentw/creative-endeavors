@@ -5,17 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#ffffff">
-<meta name="description" content="Creative Endeavors">
+<meta name="description" content="Creative Endeavors is an independent organization founded on the belief that creativity is fundamental to shaping the future of business, technology, and culture.">
+<meta property="og:title" content="Creative Endeavors">
+<meta property="og:description" content="Creative Endeavors is an independent organization founded on the belief that creativity is fundamental to shaping the future of business, technology, and culture.">
+<meta property="og:url" content="https://creativeendeavors.xyz">
 <title>Creative Endeavors</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500&display=swap">
 <style>
-/* Layout: a blank page. Name top-left, email top-right, the quote alone in the middle, one line at the foot. */
+/* Layout: a white page. Name top-left, email top-right, what this is in the middle, the quote and copyright at the foot. */
 :root {
   --bg: #ffffff;
   --fg: #111111;
   --muted: #8a8a8a;
+  --rule: #e6e6e6;
   --sans: "Instrument Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
   color-scheme: light;
 }
@@ -52,12 +56,12 @@ header {
   gap: 4px 16px;
   white-space: nowrap;
 }
-.email {
+a {
   color: var(--fg);
   text-decoration: none;
   transition: color 0.15s ease;
 }
-.email:hover, .email:focus-visible { color: var(--muted); }
+a:hover, a:focus-visible { color: var(--muted); }
 main {
   align-self: center;
   justify-self: center;
@@ -65,22 +69,28 @@ main {
   max-width: 34rem;
   padding-block: 96px;
 }
-blockquote {
+.lede {
   margin: 0;
-  font-size: 15px;
-  line-height: 1.6;
-  text-wrap: pretty;
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
 }
-blockquote p { margin: 0; }
-cite {
-  display: block;
-  margin-top: 20px;
-  font-style: normal;
-  color: var(--muted);
+.intro {
+  margin: 16px 0 0;
+  text-wrap: pretty;
 }
 footer {
   color: var(--muted);
   font-size: 13px;
+}
+footer p { margin: 0; }
+footer .epigraph {
+  max-width: 34rem;
+  margin-bottom: 8px;
+  font-style: italic;
+  text-wrap: pretty;
 }
 @media (max-width: 480px) {
   .page {
@@ -90,6 +100,7 @@ footer {
   }
   main { padding-block: 64px; }
   header { flex-direction: column; align-items: flex-start; }
+  .lede { font-size: 20px; }
 }
 </style>
 </head>
@@ -97,15 +108,19 @@ footer {
 <div class="page">
   <header>
     <p class="name">Creative Endeavors</p>
-    <a class="email" href="mailto:hello@creativeendeavors.xyz">hello@creativeendeavors.xyz</a>
+    <a href="mailto:hello@creativeendeavors.xyz">hello@creativeendeavors.xyz</a>
   </header>
   <main>
-    <blockquote>
-      <p>&ldquo;If I put this candle in an all-white gallery space, it looks like a piece of art. If I put this candle in a garage, it looks like a piece of trash. I can either spend my time designing the candle or I can spend my time designing the room that it sits in.&rdquo;</p>
-      <cite>Virgil Abloh</cite>
-    </blockquote>
+    <p class="lede">A think tank for creatives.</p>
+    <p class="intro">Creative Endeavors is an independent organization founded on the belief that creativity is fundamental to shaping the future of business, technology, and culture.</p>
+    <p class="intro">We bring together individuals who challenge convention, pursue original ideas, and see entrepreneurship as a form of creative expression.</p>
+    <p class="intro">Through community, curated experiences, and entrepreneurial initiatives, Creative Endeavors creates opportunities for people, ideas, and resources to come together.</p>
+    <p class="intro">Our purpose is to support the next generation of creative entrepreneurs and the endeavors they pursue.</p>
   </main>
-  <footer>&copy; 2026 Creative Endeavors</footer>
+  <footer>
+    <p class="epigraph">&ldquo;I can either spend my time designing the candle or I can spend my time designing the room that it sits in.&rdquo; &mdash;&nbsp;Virgil&nbsp;Abloh</p>
+    <p>&copy; 2026 Creative Endeavors</p>
+  </footer>
 </div>
 </body>
 </html>
