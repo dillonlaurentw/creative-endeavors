@@ -108,6 +108,15 @@ footer .epigraph {
   .lede { font-size: 28px; letter-spacing: -0.015em; }
   .intro { margin-top: 18px; font-size: 17px; }
   .lede + .intro { margin-top: 24px; }
+  /* Header and footer step up too, staying a notch below the middle text. */
+  .page {
+    padding-block: 40px;
+    padding-left: max(48px, env(safe-area-inset-left, 0px));
+    padding-right: max(48px, env(safe-area-inset-right, 0px));
+  }
+  body, .name { font-size: 16px; }
+  footer { font-size: 14px; }
+  footer .epigraph { max-width: 40rem; }
 }
 @media (max-width: 480px) {
   .page {
