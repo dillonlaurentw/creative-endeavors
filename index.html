@@ -54,11 +54,33 @@ body {
 header {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  white-space: nowrap;
+  align-items: flex-start;
+  gap: 16px;
 }
+/* Email and dot on the right. The dot shows the site's sections. */
+.nav { position: relative; display: flex; flex-direction: column; align-items: flex-end; }
+.nav-row { display: flex; align-items: center; gap: 16px; min-height: 1.5em; white-space: nowrap; }
+.dot {
+  margin: -8px; padding: 8px; border: 0; background: none; cursor: pointer; line-height: 0;
+}
+.dot span {
+  display: block; width: 10px; height: 10px; border-radius: 50%;
+  border: 1px solid var(--fg); background: var(--fg); transition: background 0.15s ease, opacity 0.15s ease;
+}
+.dot[aria-expanded="true"] span { background: transparent; }
+.dot:hover span { opacity: 0.6; }
+.dot:focus-visible { outline: 1px solid var(--fg); outline-offset: -2px; border-radius: 50%; }
+/* Computer: the list floats under the email, lined up with its right edge. */
+.menu {
+  position: absolute; top: 100%; right: 26px; z-index: 1;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+  margin-top: 8px; background: var(--bg); white-space: nowrap;
+  animation: menu-in 0.2s ease;
+}
+.menu[hidden] { display: none; }
+.menu .menu-email { display: none; }
+@keyframes menu-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .menu { animation: none; } }
 a {
   color: var(--fg);
   text-decoration: none;
@@ -118,6 +140,11 @@ footer .epigraph {
   footer { font-size: 14px; }
   footer .epigraph { max-width: 40rem; }
 }
+@media (max-width: 639px) {
+  .nav-email { display: none; }
+  .menu { position: static; margin-top: 16px; gap: 6px; }
+  .menu .menu-email { display: block; margin-top: 24px; color: var(--muted); }
+}
 @media (max-width: 480px) {
   .page {
     padding-block: 24px;
@@ -125,7 +152,6 @@ footer .epigraph {
     padding-right: max(20px, env(safe-area-inset-right, 0px));
   }
   main { padding-block: 64px; }
-  header { flex-direction: column; align-items: flex-start; }
   .lede { font-size: 20px; }
 }
 </style>
@@ -134,7 +160,18 @@ footer .epigraph {
 <div class="page">
   <header>
     <p class="name">Creative Endeavors</p>
-    <a href="mailto:hello@creativeendeavors.xyz">hello@creativeendeavors.xyz</a>
+    <div class="nav">
+      <div class="nav-row">
+        <a class="nav-email" href="mailto:hello@creativeendeavors.xyz">hello@creativeendeavors.xyz</a>
+        <button class="dot" type="button" aria-expanded="false" aria-controls="menu" aria-label="Open menu"><span></span></button>
+      </div>
+      <nav class="menu" id="menu" aria-label="Sections" hidden>
+        <a href="/introductions/">Introductions</a>
+        <a href="/partners/">Partners</a>
+        <a href="/sign-in/">Sign in</a>
+        <a class="menu-email" href="mailto:hello@creativeendeavors.xyz">hello@creativeendeavors.xyz</a>
+      </nav>
+    </div>
   </header>
   <main>
     <h1 class="lede">A think tank for creatives.</h1>
@@ -148,5 +185,20 @@ footer .epigraph {
     <p>&copy; 2026 Creative Endeavors</p>
   </footer>
 </div>
+<script>
+(function () {
+  var dot = document.querySelector(".dot");
+  var menu = document.getElementById("menu");
+  var nav = document.querySelector(".nav");
+  function set(open) {
+    menu.hidden = !open;
+    dot.setAttribute("aria-expanded", String(open));
+    dot.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+  }
+  dot.addEventListener("click", function () { set(menu.hidden); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !menu.hidden) { set(false); dot.focus(); } });
+  document.addEventListener("click", function (e) { if (!menu.hidden && !nav.contains(e.target)) set(false); });
+})();
+</script>
 </body>
 </html>
