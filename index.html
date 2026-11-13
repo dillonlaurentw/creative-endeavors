@@ -166,9 +166,11 @@ footer .epigraph {
         <button class="dot" type="button" aria-expanded="false" aria-controls="menu" aria-label="Open menu"><span></span></button>
       </div>
       <nav class="menu" id="menu" aria-label="Sections" hidden>
+        <a href="/members/" data-member>Members</a>
         <a href="/introductions/">Introductions</a>
         <a href="/partners/">Partners</a>
-        <a href="/sign-in/">Sign in</a>
+        <a href="/profile/" data-member>Profile</a>
+        <a href="/sign-in/" data-guest>Sign in</a>
         <a class="menu-email" href="mailto:hello@creativeendeavors.xyz">hello@creativeendeavors.xyz</a>
       </nav>
     </div>
@@ -190,6 +192,15 @@ footer .epigraph {
   var dot = document.querySelector(".dot");
   var menu = document.getElementById("menu");
   var nav = document.querySelector(".nav");
+  // Signed-in members (the community pages keep their login in this browser)
+  // see Members and Profile instead of Sign in.
+  var signedIn = false;
+  try {
+    for (var i = 0; i < localStorage.length; i++) {
+      if (/^sb-.+-auth-token$/.test(localStorage.key(i) || "")) { signedIn = true; break; }
+    }
+  } catch (e) {}
+  menu.querySelectorAll(signedIn ? "[data-guest]" : "[data-member]").forEach(function (a) { a.remove(); });
   function set(open) {
     menu.hidden = !open;
     dot.setAttribute("aria-expanded", String(open));
