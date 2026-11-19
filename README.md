@@ -18,20 +18,24 @@ The admin side of the site. Admins sign in with their site account and land on a
 
 The Start screen also lists past events that still need a write-up or photos.
 
-## Setting up the back end (once)
+## Setting up the database (once)
 
-1. In the Supabase dashboard for this project, open **SQL Editor**, paste in
-   [`supabase/migrations/20261119000000_manage.sql`](supabase/migrations/20261119000000_manage.sql) and run it.
-   It's safe to run again. It creates the `ce_` tables, the `ce-photos` storage bucket, the rules for who can see what, and the functions behind connections and admins.
-2. Make yourself the first admin. Sign up on the site if you haven't, then in the SQL Editor:
+The site's data lives in a Supabase project that you own and sign in to at supabase.com.
+Its address and public key are in one place: [`assets/ce.js`](assets/ce.js).
 
-   ```sql
-   insert into ce_admins (user_id, email)
-   select id, email from auth.users where email = 'you@example.com';
-   ```
+1. **Create the tables.** In the Supabase dashboard, open **SQL Editor → New query**, paste in all of
+   [`supabase/setup.sql`](supabase/setup.sql) and press **Run**. It's safe to run again whenever that file changes; it never deletes data.
+2. **Tell Supabase where the site is**, so sign-up and password emails link back to it:
+   **Authentication → URL Configuration** → set **Site URL** to `https://creativeendeavors.xyz` and add
+   `https://creativeendeavors.xyz/**` under **Redirect URLs**.
+3. **Create your admin account.** Go to [creativeendeavors.xyz/manage/](https://creativeendeavors.xyz/manage/) → **Create an account**,
+   using an email from the admin list at the top of `setup.sql`, and choose a password. Open the confirmation email, and you're in.
+4. **More admins:** add their email in **/manage/ → Admins**. They create their account the same way.
 
-   (Anyone already marked `is_admin` in `ce_members` is made an admin automatically by step 1.)
-3. Go to `/manage/` and sign in. Add further admins from the Admins tab.
+Forgot your password? **/manage/ → Forgot your password?** emails you a link to choose a new one.
+
+Keep **Authentication → Sign In / Providers → Email → Confirm email** switched on (it is by default):
+admin access depends on people confirming they own their email address.
 
 ## Switching on the assistant (once)
 
@@ -40,7 +44,7 @@ The assistant runs on Claude through a small Supabase Edge Function, [`supabase/
 1. Get an API key at [console.anthropic.com](https://console.anthropic.com) → API Keys.
 2. In the Supabase dashboard: **Edge Functions → Secrets** → add `ANTHROPIC_API_KEY` with that key.
 3. **Edge Functions → Deploy a new function → Via editor**, name it `ce-assistant`, paste in `supabase/functions/ce-assistant/index.ts`, and deploy.
-   (Or with the Supabase CLI: `supabase functions deploy ce-assistant --project-ref rcpdsoqzlihwchariony`.)
+   (Or with the Supabase CLI: `supabase functions deploy ce-assistant --project-ref <your project ref>`.)
 
 Until then the Assistant tab says it isn't switched on yet; everything else works without it.
 Each message costs a few cents of Claude usage (Claude Opus 5.5), billed to that API key.
@@ -55,12 +59,13 @@ Enforced by row-level security in the database, not by the page:
 | Draft events, hidden partners | – | – | read and change |
 | People, attendance, connections, admins | – | – | read and change |
 
-The key in `assets/ce.js` is Supabase's public "anon" key, the same one the community pages already use; it can only do what the public column allows.
+The key in `assets/ce.js` is Supabase's public "publishable" key; it can only do what the public column allows. Never put the secret key in the site.
 
 ## Tests
 
-- `supabase/tests/manage_test.sql` checks those rules and the connection functions. Run it against a test database with the migration applied
-  (see the comment at the top of the file); it rolls back and prints `All manage checks passed`.
+- `supabase/tests/manage_test.sql` checks those rules and the connection functions, and `supabase/tests/members_test.sql` checks admins-by-email,
+  members and introductions. Run them against a test database with `setup.sql` applied (see the comment at the top of each file);
+  on a plain Postgres, run `supabase/tests/local_supabase_stub.sql` first. Both roll back.
 - `tests/manage-ui.cjs` drives `/manage/` (including the assistant, with a scripted stand-in for Claude) and the public pages in a browser; see the comment at its top.
 
 ## Wiring more text to Site text

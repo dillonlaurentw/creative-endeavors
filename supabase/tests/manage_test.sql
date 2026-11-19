@@ -1,11 +1,11 @@
--- Checks for supabase/migrations/20261119000000_manage.sql: who can see and
+-- Checks for supabase/setup.sql: who can see and
 -- change what, ordering of connections, suggestions and "connect everyone".
--- Run inside a transaction against a test database with the migration
--- applied, two users in auth.users (an admin and a non-admin) and the admin
--- in ce_admins. Any failed check raises an error. Rolls back at the end.
+-- Run against a test database with setup.sql applied and two confirmed users
+-- in auth.users: 1111… admin@example.com (put in ce_admins) and 2222… member@example.com.
+-- Any failed check raises an error. Rolls back at the end.
 begin;
 
--- Admin (set up by the test harness: user 1111… is in ce_admins).
+-- Admin (admin@example.com is in ce_admins).
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111111","role":"authenticated"}', true);
 do $$
@@ -53,15 +53,10 @@ begin
   assert (select count(*) from ce_connections where d in (person_a, person_b)) = 0, 'connections cascade';
 
   -- Admins: add by email, can't remove yourself.
-  assert (ce_add_admin('MEMBER@test')).user_id = '22222222-2222-2222-2222-222222222222', 'add admin by email, any case';
-  assert ce_remove_admin('22222222-2222-2222-2222-222222222222'), 'remove admin';
+  assert (ce_add_admin(' MEMBER@example.com ')).email = 'member@example.com', 'add admin by email, any case';
+  assert ce_remove_admin('member@example.com'), 'remove admin';
   begin
-    perform ce_add_admin('nobody@example.com');
-    assert false, 'added an admin with no account';
-  exception when no_data_found then null;
-  end;
-  begin
-    perform ce_remove_admin('11111111-1111-1111-1111-111111111111');
+    perform ce_remove_admin('admin@example.com');
     assert false, 'removed yourself';
   exception when invalid_parameter_value then null;
   end;
@@ -101,7 +96,7 @@ begin
   exception when insufficient_privilege then null;
   end;
   begin
-    insert into ce_admins (user_id) values ('22222222-2222-2222-2222-222222222222');
+    insert into ce_admins (email) values ('member@example.com');
     assert false, 'member made themselves admin';
   exception when insufficient_privilege then null;
   end;
@@ -109,7 +104,7 @@ begin
   get diagnostics n = row_count;
   assert n = 0, 'member changed site text';
   begin
-    perform ce_add_admin('member@test');
+    perform ce_add_admin('member@example.com');
     assert false, 'member added an admin';
   exception when insufficient_privilege then null;
   end;

@@ -1,13 +1,13 @@
-/* Creative Endeavors: the site's connection to its Supabase back end.
-   The key below is the public "anon" key (the same one the community pages
-   use). It can only do what the database's row-level security allows the
-   public to do: read published events, published partners and site text. */
+/* Creative Endeavors: the site's connection to its database (Supabase).
+   This is the one place the database address and key live; every page uses
+   these two lines. The key is the public "publishable" key: it can only do
+   what the rules in supabase/setup.sql allow, so it's safe in a web page. */
 (function () {
-  var URL = "https://rcpdsoqzlihwchariony.supabase.co";
-  var KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJjcGRzb3F6bGlod2NoYXJpb255Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3NzYwNDQsImV4cCI6MjA4NDM1MjA0NH0.rMDgrkdhBVsoZRTC7bJK7kMIl3HhmLAGE1QGy9xDePU";
+  var URL = "https://project-ref.supabase.co";
+  var KEY = "sb_publishable_EGdeiS4rcz_5HL_CAR4BQg_OvRiT6FM";
 
   function get(path) {
-    return fetch(URL + "/rest/v1/" + path, { headers: { apikey: KEY, Authorization: "Bearer " + KEY } })
+    return fetch(URL + "/rest/v1/" + path, { headers: { apikey: KEY } })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); });
   }
 

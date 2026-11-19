@@ -254,12 +254,15 @@ details.more[open] summary { color: var(--fg); }
   <section class="gate" id="gate">
     <h1 id="gate-title">Manage.</h1>
     <p id="gate-text">One moment…</p>
+    <!-- One form, four jobs: sign in, create an account, ask for a reset link, choose a new password. -->
     <form id="sign-in" hidden>
-      <div class="field"><label for="si-email">Email</label><input id="si-email" type="email" autocomplete="username" required></div>
-      <div class="field"><label for="si-password">Password</label><input id="si-password" type="password" autocomplete="current-password" required></div>
-      <button class="btn" type="submit">Sign in</button>
+      <div class="field" id="si-email-field"><label for="si-email">Email</label><input id="si-email" type="email" autocomplete="username" required></div>
+      <div class="field" id="si-password-field"><label for="si-password" id="si-password-label">Password</label><input id="si-password" type="password" autocomplete="current-password" required></div>
+      <button class="btn" type="submit" id="si-submit">Sign in</button>
       <p class="status" id="si-status" role="status"></p>
-      <p class="hint">Forgot your password? Reset it on the <a href="/sign-in/">sign-in page</a>.</p>
+      <p class="hint" id="si-links">
+        <a href="#" data-mode="signup">Create an account</a> &middot; <a href="#" data-mode="forgot">Forgot your password?</a>
+      </p>
     </form>
   </section>
 

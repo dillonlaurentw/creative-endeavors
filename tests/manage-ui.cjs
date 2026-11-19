@@ -8,13 +8,14 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const S = process.argv[2];
-const SUPA = 'https://rcpdsoqzlihwchariony.supabase.co';
+// The database address, read from the site's own settings file.
+const SUPA = fs.readFileSync(__dirname + '/../assets/ce.js', 'utf8').match(/var URL = "([^"]+)"/)[1];
 // The supabase-js browser build, pinned like manage/index.html: npm pack @supabase/supabase-js@2.45.4, untar, pass package/dist/umd/supabase.js.
 const UMD = fs.readFileSync(process.argv[3]);
 const ADMIN = { id: '11111111-1111-1111-1111-111111111111', email: 'admin@example.com', aud: 'authenticated', role: 'authenticated' };
 let n = 0; const uid = () => '00000000-0000-4000-8000-' + String(++n).padStart(12, '0');
-const db = { ce_events: [], ce_people: [], ce_event_people: [], ce_connections: [], ce_partners: [], ce_site_content: [], ce_admins: [{ user_id: ADMIN.id, email: ADMIN.email, created_at: new Date().toISOString() }] };
-const keyOf = { ce_event_people: ['event_id', 'person_id'], ce_site_content: ['key'], ce_admins: ['user_id'] };
+const db = { ce_events: [], ce_people: [], ce_event_people: [], ce_connections: [], ce_partners: [], ce_site_content: [], ce_admins: [{ email: ADMIN.email, created_at: new Date().toISOString() }] };
+const keyOf = { ce_event_people: ['event_id', 'person_id'], ce_site_content: ['key'], ce_admins: ['email'] };
 const calls = [];
 function filt(rows, q) {
   for (const [k, v] of q) {
@@ -43,8 +44,8 @@ function rpc(fn, a) {
       return { person_id: p.id, first_name: p.first_name, last_name: p.last_name, headline: p.headline, score: se * 3 + common.length, shared_events: se, shared_interests: common };
     }).filter(x => x.score > 0).sort((x, y) => y.score - x.score);
   }
-  if (fn === 'ce_add_admin') { const row = { user_id: uid(), email: a.p_email, created_at: new Date().toISOString() }; db.ce_admins.push(row); return row; }
-  if (fn === 'ce_remove_admin') { db.ce_admins = db.ce_admins.filter(x => x.user_id !== a.p_user); return true; }
+  if (fn === 'ce_add_admin') { const row = { email: a.p_email.trim().toLowerCase(), created_at: new Date().toISOString() }; db.ce_admins.push(row); return row; }
+  if (fn === 'ce_remove_admin') { db.ce_admins = db.ce_admins.filter(x => x.email !== a.p_email); return true; }
 }
 const files = {};
 let fnCalls = [];

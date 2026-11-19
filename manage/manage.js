@@ -2,7 +2,7 @@
    The admin side of the site: events (with photos and write-ups), people,
    who came to what, connections, partners, the words on the public pages,
    and admins. Everything is saved straight to the site's Supabase database;
-   its row-level security (supabase/migrations) is what keeps it admin-only.
+   its row-level security (supabase/setup.sql) is what keeps it admin-only.
    Text from the database is always written with textContent, never as HTML. */
 (function () {
   "use strict";
@@ -737,7 +737,7 @@
 
   function adminsTab() {
     var listEl = h("ul", { class: "items" });
-    var emailIn = h("input", { id: "ad-email", type: "email", placeholder: "Their sign-in email", required: true });
+    var emailIn = h("input", { id: "ad-email", type: "email", placeholder: "Their email address", required: true });
     var form = h("form", { class: "adder" }, h("div", { class: "field" }, h("label", { for: "ad-email", text: "Make someone an admin" }), emailIn), h("span"), h("button", { class: "btn", type: "submit", text: "Add admin" }));
     form.addEventListener("submit", function (ev) {
       ev.preventDefault();
@@ -750,17 +750,17 @@
       sb.from("ce_admins").select("*").order("created_at").then(function (r) {
         if (r.error) return fail(r.error, "Couldn’t load admins");
         fill(listEl, r.data.map(function (a) {
-          var self = a.user_id === me.id;
-          return h("li", null, h("span", { class: "main" }, a.email || a.user_id, h("span", { class: "s", text: self ? "You" : "Since " + fmtDate(a.created_at) })),
+          var self = a.email === (me.email || "").toLowerCase();
+          return h("li", null, h("span", { class: "main" }, a.email, h("span", { class: "s", text: self ? "You" : "Since " + fmtDate(a.created_at) })),
             self ? null : h("button", { class: "link danger", type: "button", text: "Remove", onclick: function () {
-              if (!confirm("Remove " + (a.email || "this admin") + " as an admin?")) return;
-              sb.rpc("ce_remove_admin", { p_user: a.user_id }).then(function (d) { if (d.error) return fail(d.error); say("Removed.", "ok"); load(); });
+              if (!confirm("Remove " + a.email + " as an admin?")) return;
+              sb.rpc("ce_remove_admin", { p_email: a.email }).then(function (d) { if (d.error) return fail(d.error); say("Removed.", "ok"); load(); });
             } }));
         }));
       });
     }
     load();
-    return h("section", { class: "panel narrow" }, h("h2", { text: "Admins" }), h("p", { class: "hint", text: "Admins can change everything here. They need an account on the website first." }), listEl, form);
+    return h("section", { class: "panel narrow" }, h("h2", { text: "Admins" }), h("p", { class: "hint", text: "Admins can change everything here. Add their email address; they create their account at /manage/ with that email and confirm it." }), listEl, form);
   }
 
   // Assistant ---------------------------------------------------------------------------------------
@@ -1115,37 +1115,99 @@
 
   function gate(title, text, showForm) {
     $("app").hidden = true; $("gate").hidden = false;
-    $("gate-title").textContent = title; $("gate-text").textContent = text;
     $("sign-in").hidden = !showForm;
+    if (showForm) return setMode(mode, true);
+    $("gate-title").textContent = title; $("gate-text").textContent = text;
   }
   var started = false;
   function start(session) {
     me = session ? session.user : null;
     $("who").hidden = !me;
     if (me) $("who-email").textContent = me.email || "";
-    if (!me) { started = false; return gate("Manage.", "Sign in with your Creative Endeavors account.", true); }
+    if (!me) { started = false; return gate("", "", true); }
+    if (recovering) { started = false; mode = "newpass"; return gate("", "", true); }
     if (started) return;
     started = true;
     gate("Manage.", "One moment…", false);
     sb.rpc("ce_is_admin").then(function (r) {
-      if (r.error) { started = false; return gate("Almost ready.", "The admin area isn’t set up in the database yet. Run supabase/migrations/20261119000000_manage.sql in Supabase (see the README).", false); }
-      if (!r.data) { started = false; return gate("Admins only.", "You’re signed in as " + (me.email || "someone") + ", which isn’t an admin account. Ask an admin to add you.", false); }
+      if (r.error) { started = false; return gate("Almost ready.", "The admin area isn’t set up in the database yet. Run supabase/setup.sql in Supabase (see the README).", false); }
+      if (!r.data) { started = false; return gate("Admins only.", "You’re signed in as " + (me.email || "someone") + ", which isn’t on the admin list. Ask an admin to add your email in /manage/ → Admins.", false); }
       return Promise.all([loadPeople(), loadEvents()]).then(function () { $("gate").hidden = true; $("app").hidden = false; render(); });
     }).catch(function (err) { started = false; fail(err); gate("Manage.", "Something went wrong. Please refresh the page.", false); });
   }
+  // The sign-in form has four modes. Admins create their own account here with
+  // the email they were made an admin with (see the list in supabase/setup.sql).
+  var MODES = {
+    signin: { title: "Manage.", text: "Sign in with your Creative Endeavors account.", button: "Sign in", password: "Password", links: '<a href="#" data-mode="signup">Create an account</a> · <a href="#" data-mode="forgot">Forgot your password?</a>' },
+    signup: { title: "Create an account.", text: "Use the email address you were made an admin with, and choose a password of at least 8 characters.", button: "Create account", password: "Choose a password", links: 'Already have an account? <a href="#" data-mode="signin">Sign in</a>' },
+    forgot: { title: "Forgot your password?", text: "We’ll email you a link to choose a new one.", button: "Email me a link", links: '<a href="#" data-mode="signin">Back to sign in</a>' },
+    newpass: { title: "Choose a new password.", text: "At least 8 characters.", button: "Save password", password: "New password", links: "" },
+  };
+  var mode = "signin";
+  // Arriving from a password reset email (the link ends in type=recovery).
+  var recovering = /type=recovery/.test(location.hash);
+  function setMode(m, keepStatus) {
+    mode = m; var c = MODES[m];
+    $("gate-title").textContent = c.title; $("gate-text").textContent = c.text;
+    $("si-submit").textContent = c.button;
+    $("si-email-field").hidden = m === "newpass"; $("si-email").required = m !== "newpass";
+    $("si-password-field").hidden = m === "forgot"; $("si-password").required = m !== "forgot";
+    if (c.password) $("si-password-label").textContent = c.password;
+    $("si-password").autocomplete = m === "signin" ? "current-password" : "new-password";
+    // Only new passwords need to be 8+ characters; existing ones sign in as they are.
+    if (m === "signup" || m === "newpass") $("si-password").minLength = 8; else $("si-password").removeAttribute("minlength");
+    $("si-links").innerHTML = c.links;
+    if (!keepStatus) { $("si-status").textContent = ""; $("si-status").className = "status"; }
+  }
+  $("si-links").addEventListener("click", function (ev) {
+    var m = ev.target.getAttribute && ev.target.getAttribute("data-mode");
+    if (m) { ev.preventDefault(); setMode(m); $(m === "newpass" ? "si-password" : "si-email").focus(); }
+  });
+  function siSay(text, error) { var st = $("si-status"); st.textContent = text; st.className = "status show" + (error ? " error" : ""); }
+  var authMessages = {
+    "Invalid login credentials": "That email and password don’t match.",
+    "Email not confirmed": "Please confirm your email first: open the link we sent you, then sign in.",
+    "User already registered": "There’s already an account with that email. Sign in, or reset your password.",
+  };
+  function authError(err) { return authMessages[err.message] || err.message; }
   $("sign-in").addEventListener("submit", function (ev) {
     ev.preventDefault();
-    var st = $("si-status");
-    st.textContent = "Signing in…"; st.className = "status show";
-    sb.auth.signInWithPassword({ email: $("si-email").value.trim(), password: $("si-password").value }).then(function (r) {
-      if (r.error) { st.textContent = r.error.message === "Invalid login credentials" ? "That email and password don’t match." : r.error.message; st.className = "status error show"; return; }
-      st.textContent = ""; st.className = "status";
-    });
+    var email = $("si-email").value.trim(), password = $("si-password").value;
+    var back = location.origin + "/manage/";
+    if (mode === "signin") {
+      siSay("Signing in…");
+      sb.auth.signInWithPassword({ email: email, password: password }).then(function (r) {
+        if (r.error) return siSay(authError(r.error), true);
+        siSay("");
+      });
+    } else if (mode === "signup") {
+      siSay("Creating your account…");
+      sb.auth.signUp({ email: email, password: password, options: { emailRedirectTo: back } }).then(function (r) {
+        if (r.error) return siSay(authError(r.error), true);
+        if (r.data && r.data.session) return siSay("");
+        setMode("signin", true);
+        siSay("Almost there. We’ve emailed " + email + " a link to confirm the address. Open it, and you’ll be signed in.");
+      });
+    } else if (mode === "forgot") {
+      siSay("Sending…");
+      sb.auth.resetPasswordForEmail(email, { redirectTo: back }).then(function (r) {
+        if (r.error) return siSay(authError(r.error), true);
+        siSay("If there’s an account for " + email + ", a link to choose a new password is on its way.");
+      });
+    } else if (mode === "newpass") {
+      siSay("Saving…");
+      sb.auth.updateUser({ password: password }).then(function (r) {
+        if (r.error) return siSay(authError(r.error), true);
+        recovering = false; $("si-password").value = ""; setMode("signin");
+        sb.auth.getSession().then(function (s) { start(s.data.session); });
+      });
+    }
   });
   $("sign-out").addEventListener("click", function () { sb.auth.signOut(); });
   sb.auth.onAuthStateChange(function (event, session) {
     if (event === "SIGNED_OUT") { started = false; people = []; events = []; }
     // Deferred: supabase-js holds a lock during this callback, and database calls made inside it can stall.
-    if (event === "INITIAL_SESSION" || event === "SIGNED_IN" || event === "SIGNED_OUT") setTimeout(function () { start(session); }, 0);
+    if (event === "PASSWORD_RECOVERY") recovering = true;
+    if (event === "INITIAL_SESSION" || event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "PASSWORD_RECOVERY") setTimeout(function () { start(session); }, 0);
   });
 })();
