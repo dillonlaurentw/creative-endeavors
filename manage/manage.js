@@ -164,6 +164,7 @@
       return upload(f, folder).then(function (u) { n++; say("Uploading… " + n + " of " + files.length); return u; }).catch(function (e) { console.error(e); return null; });
     })).then(function (urls) {
       var ok = urls.filter(Boolean);
+      if (ok.length === files.length) say("");
       if (ok.length < files.length) say((files.length - ok.length) + " photo" + (files.length - ok.length === 1 ? "" : "s") + " couldn’t be uploaded. Try again, or try a JPEG.", "error");
       done(ok);
     });
@@ -199,6 +200,8 @@
     var first = (me && me.email || "").split("@")[0];
     return h("div", { class: "start" },
       h("h1", { class: "hello", text: "What would you like to do?" }),
+      h("div", { class: "quick" }, h("p", { class: "quick-label", text: "Ask the assistant" }), composer(true)),
+      h("h3", { text: "Or do it yourself" }),
       h("div", { class: "cards" },
         card("#events/new", "Add an upcoming event", "Name, date, place and a photo. Publish it when you’re ready."),
         card("#events/new-past", "Write up a past event", "Tell the story of what happened and add the photos."),
@@ -760,9 +763,341 @@
     return h("section", { class: "panel narrow" }, h("h2", { text: "Admins" }), h("p", { class: "hint", text: "Admins can change everything here. They need an account on the website first." }), listEl, form);
   }
 
+  // Assistant ---------------------------------------------------------------------------------------
+  // A chat with Claude that does the admin work: the function in
+  // supabase/functions/ce-assistant relays each turn to Claude; the tools it
+  // asks for run here, with this admin's own permissions. Changes to the public
+  // website wait for the admin to press Approve.
+
+  var FN_URL = CE.url + "/functions/v1/ce-assistant";
+  var MAX_STEPS = 30;
+  var convo = null;
+  try { convo = JSON.parse(localStorage.getItem("ce-assistant") || "null"); } catch (e) { convo = null; }
+  if (!convo || !Array.isArray(convo.messages)) convo = freshConvo();
+  // Reloaded mid-step: answer any tool calls left hanging so the conversation can go on.
+  (function () {
+    var last = convo.messages[convo.messages.length - 1];
+    if (!last || last.role !== "assistant" || !Array.isArray(last.content)) return;
+    var hanging = last.content.filter(function (b) { return b.type === "tool_use"; });
+    if (hanging.length) convo.messages.push({ role: "user", content: hanging.map(function (b) { return { type: "tool_result", tool_use_id: b.id, content: "Not done: the admin reloaded the page before this finished.", is_error: true }; }) });
+  })();
+  var busy = false, pending = [], assistantView = null;
+  function freshConvo() { return { messages: [], display: [], photos: {}, next: 1 }; }
+  function saveConvo() { try { localStorage.setItem("ce-assistant", JSON.stringify(convo)); } catch (e) { /* too big or blocked: keep it in memory */ } }
+  function show(item) { convo.display.push(item); saveConvo(); drawAssistant(); }
+
+  function localNow() {
+    var d = new Date(), tz = "";
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { /* ignore */ }
+    return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }) + ", " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) + (tz ? " (" + tz + ")" : "");
+  }
+  function callAssistant() {
+    return sb.auth.getSession().then(function (s) {
+      var token = s.data.session && s.data.session.access_token;
+      return fetch(FN_URL, { method: "POST", headers: { "Content-Type": "application/json", apikey: CE.key, Authorization: "Bearer " + token }, body: JSON.stringify({ messages: convo.messages }) });
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) {
+        if (!r.ok) throw new Error(body.error || (r.status === 404 ? "The assistant isn’t switched on yet (its Supabase function hasn’t been deployed)." : "The assistant couldn’t be reached."));
+        return body;
+      });
+    });
+  }
+
+  function sendToAssistant(text, files) {
+    if (busy) return;
+    text = (text || "").trim();
+    if (!text && !(files && files.length)) return;
+    busy = true; drawAssistant();
+    var uploads = files && files.length ? new Promise(function (res) { uploadMany(files, "chat", res); }) : Promise.resolve([]);
+    uploads.then(function (urls) {
+      var ids = urls.map(function (u) { var id = "photo-" + convo.next++; convo.photos[id] = u; return id; });
+      var content = urls.slice(0, 8).map(function (u) { return { type: "image", source: { type: "url", url: u } }; });
+      var note = "[Admin’s local time: " + localNow() + "]\n" + (text || "Here are some photos.");
+      if (ids.length) note += "\n\n[Photos shared: " + ids.join(", ") + (ids.length > 8 ? " (the first 8 are shown to you)" : "") + "]";
+      content.push({ type: "text", text: note });
+      convo.messages.push({ role: "user", content: content });
+      show({ who: "you", text: text, photos: urls });
+      return loop();
+    }).catch(function (err) { show({ who: "error", text: err.message || String(err) }); })
+      .then(function () { busy = false; saveConvo(); drawAssistant(); return Promise.all([loadPeople(), loadEvents()]); })
+      .then(function () { drawAssistant(); });
+  }
+
+  function loop(step) {
+    step = step || 0;
+    if (step >= MAX_STEPS) { show({ who: "error", text: "That took a lot of steps, so I stopped. Tell me to carry on if there’s more to do." }); return Promise.resolve(); }
+    return callAssistant().then(function (res) {
+      convo.messages.push({ role: "assistant", content: res.content });
+      res.content.forEach(function (b) { if (b.type === "text" && b.text.trim()) show({ who: "assistant", text: b.text.trim() }); });
+      if (res.stop_reason === "refusal") { show({ who: "error", text: "The assistant can’t help with that one." }); return; }
+      if (res.stop_reason === "max_tokens") { show({ who: "error", text: "That answer was cut off. Ask me to continue." }); return; }
+      if (res.stop_reason === "pause_turn") return loop(step + 1);
+      var uses = res.content.filter(function (b) { return b.type === "tool_use"; });
+      if (!uses.length) { saveConvo(); return; }
+      return uses.reduce(function (p, u) {
+        return p.then(function (results) {
+          return Promise.resolve().then(function () { return runTool(u.name, u.input || {}); })
+            .then(function (out) { results.push({ type: "tool_result", tool_use_id: u.id, content: JSON.stringify(out) }); return results; },
+              function (err) { console.error(err); results.push({ type: "tool_result", tool_use_id: u.id, content: "Error: " + ((err && err.message) || String(err)), is_error: true }); return results; });
+        });
+      }, Promise.resolve([])).then(function (results) {
+        convo.messages.push({ role: "user", content: results });
+        saveConvo();
+        return loop(step + 1);
+      });
+    });
+  }
+
+  // What the assistant did, in a line the admin can follow.
+  function did(text, href) { show({ who: "action", text: text, href: href }); }
+  function q(promise) { return promise.then(function (r) { if (r.error) throw new Error(r.error.message); return r.data; }); }
+  function brief(p) { return { id: p.id, name: fullName(p), headline: p.headline, city: p.city, email: p.email, disciplines: p.disciplines, tags: p.tags }; }
+  function briefEvent(e) { return { id: e.id, title: e.title, starts: toLocalInput(e.starts_at), venue: e.venue, city: e.city, published: e.published, past: isPast(e), has_story: !!e.story, photos: (e.photos || []).length }; }
+  function search(listOf, query, parts) {
+    var words = (query || "").toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return listOf.slice(0, 15);
+    var scored = listOf.map(function (x) { var hay = parts(x).join(" ").toLowerCase(); return { x: x, n: words.filter(function (w) { return hay.indexOf(w) !== -1; }).length }; });
+    return scored.filter(function (s) { return s.n; }).sort(function (a, b) { return b.n - a.n; }).slice(0, 15).map(function (s) { return s.x; });
+  }
+  function needEvent(id) { var e = eventById[id]; if (!e) throw new Error("No event with id " + id + ". Search for it first."); return e; }
+  function needPerson(id) { var p = personById[id]; if (!p) throw new Error("No person with id " + id + ". Search for them first."); return p; }
+  function localToIso(v, label) { if (!v) return null; var d = new Date(v); if (isNaN(d)) throw new Error(label + " must look like 2026-12-10T19:00."); return d.toISOString(); }
+  function httpsOk(v) { if (v && !/^https?:\/\//i.test(v)) throw new Error("Links must start with https://"); return v || null; }
+  function personFields(i) {
+    var d = {};
+    if (i.name) Object.assign(d, splitName(i.name));
+    ["headline", "city", "bio", "notes", "phone"].forEach(function (k) { if (i[k] !== undefined) d[k] = clean(i[k]); });
+    if (i.email !== undefined) d.email = clean(i.email) && i.email.trim().toLowerCase();
+    if (i.links) d.links = i.links.map(function (l) { l = String(l).trim(); return /^@/.test(l) ? "https://instagram.com/" + l.slice(1) : l; }).filter(function (l) { return /^https?:\/\//i.test(l); });
+    if (i.disciplines) d.disciplines = i.disciplines.map(String);
+    if (i.tags) d.tags = i.tags.map(String);
+    return d;
+  }
+  function refresh() { return Promise.all([loadPeople(), loadEvents()]); }
+
+  function runTool(name, i) {
+    switch (name) {
+      case "search_people":
+        return search(people, i.query, function (p) { return [fullName(p), p.email || "", p.headline || "", p.city || "", (p.disciplines || []).join(" "), (p.tags || []).join(" ")]; }).map(brief);
+      case "get_person": {
+        var p = needPerson(i.person_id);
+        return Promise.all([q(sb.from("ce_event_people").select("event_id, role").eq("person_id", p.id)), q(sb.from("ce_connections").select("*").or("person_a.eq." + p.id + ",person_b.eq." + p.id))]).then(function (r) {
+          return Object.assign({}, brief(p), { bio: p.bio, notes: p.notes, links: p.links, phone: p.phone, has_photo: !!p.photo_url,
+            events: r[0].map(function (x) { var e = eventById[x.event_id]; return e ? { event_id: e.id, title: e.title, starts: toLocalInput(e.starts_at), role: x.role } : null; }).filter(Boolean),
+            connections: r[1].map(function (c) { var o = c.person_a === p.id ? c.person_b : c.person_a; return { person_id: o, name: fullName(personById[o]), kind: c.kind, note: c.note }; }) });
+        });
+      }
+      case "save_person": {
+        var data = personFields(i);
+        if (i.person_id) {
+          var existing = needPerson(i.person_id);
+          return q(sb.from("ce_people").update(data).eq("id", existing.id).select().single()).then(function (row) { did("Updated " + fullName(row), "#people/" + row.id); return refresh().then(function () { return brief(row); }); });
+        }
+        if (!data.first_name) throw new Error("A new person needs a name.");
+        var dupe = findPerson(fullName(data));
+        if (dupe) return { already_exists: true, person: brief(dupe), hint: "Pass person_id to update them instead." };
+        return q(sb.from("ce_people").insert(data).select().single()).then(function (row) { did("Added " + fullName(row) + " to People", "#people/" + row.id); return refresh().then(function () { return brief(row); }); });
+      }
+      case "search_events": {
+        var pool = events.filter(function (e) { return i.when === "upcoming" ? !isPast(e) : i.when === "past" ? isPast(e) : true; });
+        return search(pool, i.query, function (e) { return [e.title, e.venue || "", e.city || "", e.kind || "", toLocalInput(e.starts_at)]; }).map(briefEvent);
+      }
+      case "get_event": {
+        var e = needEvent(i.event_id);
+        return q(sb.from("ce_event_people").select("person_id, role").eq("event_id", e.id)).then(function (rows) {
+          return Object.assign(briefEvent(e), { ends: toLocalInput(e.ends_at), kind: e.kind, description: e.description, story: e.story, link: e.link, has_cover: !!e.cover_url,
+            people: rows.map(function (x) { return { person_id: x.person_id, name: fullName(personById[x.person_id]), role: x.role }; }) });
+        });
+      }
+      case "save_event": {
+        var d = {};
+        ["title", "venue", "city", "kind", "description", "story"].forEach(function (k) { if (i[k] !== undefined) d[k] = clean(i[k]); });
+        if (i.link !== undefined) d.link = httpsOk(clean(i.link));
+        if (i.starts_at !== undefined) d.starts_at = localToIso(i.starts_at, "starts_at");
+        if (i.ends_at !== undefined) d.ends_at = localToIso(i.ends_at, "ends_at");
+        if (i.event_id) {
+          var ev = needEvent(i.event_id);
+          return q(sb.from("ce_events").update(d).eq("id", ev.id).select().single()).then(function (row) { did("Updated “" + row.title + "”", "#events/" + row.id); return refresh().then(function () { return briefEvent(row); }); });
+        }
+        if (!d.title || !d.starts_at) throw new Error("A new event needs a title and starts_at.");
+        d.published = false;
+        return q(sb.from("ce_events").insert(d).select().single()).then(function (row) { did("Created “" + row.title + "” (draft)", "#events/" + row.id); return refresh().then(function () { return briefEvent(row); }); });
+      }
+      case "add_people_to_event": {
+        var evt = needEvent(i.event_id), made = [];
+        return (i.people || []).reduce(function (p, x) {
+          return p.then(function (acc) {
+            var found = x.person_id ? personById[x.person_id] : (x.name ? findPerson(x.name) : null);
+            if (found) { acc.push({ person: found, role: x.role }); return acc; }
+            if (!x.name) throw new Error("Each person needs a person_id or a name.");
+            var fields = splitName(x.name); if (x.email) fields.email = x.email.trim().toLowerCase();
+            return q(sb.from("ce_people").insert(fields).select().single()).then(function (row) { made.push(fullName(row)); people.push(row); personById[row.id] = row; acc.push({ person: row, role: x.role }); return acc; });
+          });
+        }, Promise.resolve([])).then(function (acc) {
+          return q(sb.from("ce_event_people").upsert(acc.map(function (a) { return { event_id: evt.id, person_id: a.person.id, role: a.role || "attendee" }; }))).then(function () {
+            did("Added " + acc.length + " to “" + evt.title + "”" + (made.length ? " (new: " + made.join(", ") + ")" : ""), "#events/" + evt.id);
+            return refresh().then(function () { return { added: acc.map(function (a) { return { person_id: a.person.id, name: fullName(a.person), role: a.role }; }), created: made }; });
+          });
+        });
+      }
+      case "connect_people": {
+        var a = needPerson(i.person_a), b = needPerson(i.person_b);
+        if (a.id === b.id) throw new Error("That's the same person.");
+        if (i.event_id) needEvent(i.event_id);
+        return sb.from("ce_connections").insert({ person_a: a.id, person_b: b.id, kind: i.kind, note: clean(i.note), event_id: i.event_id || null }).then(function (r) {
+          if (r.error && r.error.code === "23505") return { already_connected: true };
+          if (r.error) throw new Error(r.error.message);
+          did("Connected " + fullName(a) + " and " + fullName(b) + " (" + i.kind + ")", "#people/" + a.id);
+          return { connected: true };
+        });
+      }
+      case "connect_everyone_at_event": {
+        var ce = needEvent(i.event_id);
+        return q(sb.rpc("ce_connect_event", { p_event: ce.id })).then(function (n) { if (n) did("Connected everyone at “" + ce.title + "” (" + n + " new)", "#events/" + ce.id); return { new_connections: n }; });
+      }
+      case "suggest_connections":
+        needPerson(i.person_id);
+        return q(sb.rpc("ce_connection_suggestions", { p_person: i.person_id, p_limit: 10 })).then(function (rows) { return rows.map(function (s) { return { person_id: s.person_id, name: fullName(s), shared_events: s.shared_events, shared_interests: s.shared_interests }; }); });
+      case "attach_photos": {
+        var urls = (i.photo_ids || []).map(function (id) { var u = convo.photos[id]; if (!u) throw new Error("No shared photo called " + id + "."); return u; });
+        if (!urls.length) throw new Error("No photos given.");
+        if (i.person_id) {
+          var pp = needPerson(i.person_id);
+          return q(sb.from("ce_people").update({ photo_url: urls[0] }).eq("id", pp.id)).then(function () { did("Set " + fullName(pp) + "’s photo", "#people/" + pp.id); return refresh().then(function () { return { ok: true }; }); });
+        }
+        var ee = needEvent(i.event_id);
+        var photos = (ee.photos || []).concat(urls.filter(function (u) { return (ee.photos || []).indexOf(u) === -1; }));
+        var cover = i.cover_photo_id ? convo.photos[i.cover_photo_id] : (ee.cover_url || urls[0]);
+        return q(sb.from("ce_events").update({ photos: photos, cover_url: cover || null }).eq("id", ee.id)).then(function () {
+          did("Added " + urls.length + " photo" + (urls.length === 1 ? "" : "s") + " to “" + ee.title + "”", "#events/" + ee.id);
+          return refresh().then(function () { return { photos_now: photos.length, cover_set: !!cover }; });
+        });
+      }
+      case "propose_publish": {
+        var pe = needEvent(i.event_id);
+        return approve((i.publish ? "Put “" + pe.title + "” on the website?" : "Take “" + pe.title + "” off the website?"), i.publish ? "Publish" : "Take it off", "#events/" + pe.id).then(function (yes) {
+          if (!yes) return { approved: false };
+          return q(sb.from("ce_events").update({ published: !!i.publish }).eq("id", pe.id)).then(function () { did(i.publish ? "“" + pe.title + "” is on the website" : "“" + pe.title + "” is off the website", "#events/" + pe.id); return refresh().then(function () { return { approved: true, published: !!i.publish, url: "https://creativeendeavors.xyz" + eventUrl(eventById[pe.id] || pe) }; }); });
+        });
+      }
+      case "propose_website_words": {
+        var item = CONTENT.find(function (c) { return c.key === i.key; });
+        if (!item) throw new Error("Unknown key.");
+        return approve("Change “" + item.name + "” to:", "Make it live", null, i.value).then(function (yes) {
+          if (!yes) return { approved: false };
+          return q(sb.from("ce_site_content").upsert({ key: i.key, value: String(i.value).trim() })).then(function () { did("Updated " + item.name.toLowerCase() + " on the website", "#content"); return { approved: true }; });
+        });
+      }
+      case "propose_delete": {
+        if (i.event_id) {
+          var de = needEvent(i.event_id);
+          return approve("Delete the event “" + de.title + "”? This can’t be undone.", "Delete", "#events/" + de.id).then(function (yes) {
+            if (!yes) return { approved: false };
+            return q(sb.from("ce_events").delete().eq("id", de.id)).then(function () { did("Deleted “" + de.title + "”"); return refresh().then(function () { return { approved: true, deleted: true }; }); });
+          });
+        }
+        if (i.person_id) {
+          var dp = needPerson(i.person_id);
+          return approve("Delete " + fullName(dp) + " from People? Their events list and connections go too.", "Delete", "#people/" + dp.id).then(function (yes) {
+            if (!yes) return { approved: false };
+            return q(sb.from("ce_people").delete().eq("id", dp.id)).then(function () { did("Deleted " + fullName(dp)); return refresh().then(function () { return { approved: true, deleted: true }; }); });
+          });
+        }
+        throw new Error("Give an event_id or a person_id.");
+      }
+      default:
+        throw new Error("Unknown tool " + name);
+    }
+  }
+
+  // An Approve / No thanks card; resolves true or false.
+  function approve(question, yesText, href, detail) {
+    return new Promise(function (resolve) {
+      var item = { who: "approve", text: question, detail: detail, href: href, yes: yesText, answer: null };
+      pending.push({ item: item, resolve: resolve });
+      show(item);
+    });
+  }
+  function answer(item, yes) {
+    var i = pending.findIndex(function (x) { return x.item === item; });
+    item.answer = yes ? "approved" : "declined";
+    saveConvo(); drawAssistant();
+    if (i >= 0) { var p = pending.splice(i, 1)[0]; p.resolve(yes); }
+  }
+
+  function composer(compact) {
+    var files = [];
+    var input = h("textarea", { id: compact ? "quick-ask" : "ask", rows: compact ? 3 : 2, placeholder: compact ? "Tell the assistant what happened or what you need, e.g. “Add last Friday’s dinner at The Loft with Maya Chen and Jordan Ellis, and write it up from these notes…”" : "Message the assistant… (Enter to send, Shift+Enter for a new line)" });
+    var chips = h("div", { class: "attach-list" });
+    var picker = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
+    function drawFiles() { fill(chips, files.map(function (f, n) { return h("span", { class: "attach" }, f.name, h("button", { type: "button", "aria-label": "Remove " + f.name, text: "×", onclick: function () { files.splice(n, 1); drawFiles(); } })); })); }
+    picker.addEventListener("change", function () { files = files.concat([].slice.call(picker.files)); picker.value = ""; drawFiles(); });
+    var form = h("form", { class: "composer" + (compact ? " compact" : "") },
+      input, chips,
+      h("div", { class: "composer-bar" }, h("button", { type: "button", class: "btn ghost small", text: "Add photos", onclick: function () { picker.click(); } }), picker, h("span", { class: "spacer" }),
+        h("button", { type: "submit", class: "btn", disabled: busy, text: busy ? "Working…" : "Send" })));
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      if (busy) return;
+      var t = input.value, f = files.slice();
+      if (!t.trim() && !f.length) return input.focus();
+      input.value = ""; files = []; drawFiles();
+      if (compact) location.hash = "#assistant";
+      sendToAssistant(t, f);
+    });
+    input.addEventListener("keydown", function (ev) { if (ev.key === "Enter" && !ev.shiftKey && !compact) { ev.preventDefault(); form.requestSubmit(); } });
+    ["dragover", "drop"].forEach(function (t) { form.addEventListener(t, function (ev) { ev.preventDefault(); if (t === "drop") { files = files.concat([].filter.call(ev.dataTransfer.files, function (x) { return /^image\//.test(x.type); })); drawFiles(); } }); });
+    return form;
+  }
+
+  function assistantTab() {
+    assistantView = h("div", { class: "chat-log", "aria-live": "polite" });
+    var wrap = h("section", { class: "assistant" },
+      h("div", { class: "panel-head" }, h("h2", { text: "Assistant" }), h("span", { class: "spacer" }),
+        h("button", { class: "link", type: "button", text: "New conversation", onclick: function () {
+          if (busy) return say("Wait for the assistant to finish first.", "error");
+          if (convo.messages.length && !confirm("Start a new conversation? This one will be cleared from this screen (nothing it saved is undone).")) return;
+          pending.forEach(function (p) { p.resolve(false); }); pending = [];
+          convo = freshConvo(); saveConvo(); render();
+        } })),
+      h("p", { class: "hint", text: "Tell it what happened, paste notes or lists, add photos. It creates events and people, writes the stories, makes connections, and asks before anything goes on the website." }),
+      assistantView, composer(false));
+    // Drawn once the tab is on the page (render attaches it after this returns).
+    setTimeout(function () { drawAssistant(); var a = $("ask"); if (a) a.focus(); }, 0);
+    return wrap;
+  }
+  function drawAssistant() {
+    if (!assistantView || !document.body.contains(assistantView)) return;
+    var items = convo.display.map(function (d) {
+      if (d.who === "you") return h("div", { class: "msg you" }, d.photos && d.photos.length ? h("div", { class: "msg-photos" }, d.photos.map(function (u) { return h("img", { src: u, alt: "" }); })) : null, d.text ? h("p", { text: d.text }) : null);
+      if (d.who === "assistant") return h("div", { class: "msg bot" }, d.text.split(/\n{2,}/).map(function (p) { return h("p", { text: p.replace(/\*\*(.+?)\*\*/g, "$1") }); }));
+      if (d.who === "action") return h("div", { class: "msg action" }, h("span", { class: "tick", "aria-hidden": "true", text: "✓" }), d.href ? h("a", { href: d.href, text: d.text }) : d.text);
+      if (d.who === "error") return h("div", { class: "msg err", text: d.text });
+      if (d.who === "approve") {
+        var live = pending.some(function (p) { return p.item === d; });
+        return h("div", { class: "msg approve" }, h("p", { class: "q", text: d.text }), d.detail ? h("blockquote", { text: d.detail }) : null,
+          d.answer ? h("p", { class: "s", text: d.answer === "approved" ? "Approved" : "Declined" })
+            : live ? h("div", { class: "row2" }, h("button", { class: "btn accent small", type: "button", text: d.yes, onclick: function () { answer(d, true); } }), h("button", { class: "btn ghost small", type: "button", text: "No thanks", onclick: function () { answer(d, false); } }), d.href ? h("a", { class: "link", href: d.href, text: "Look first" }) : null)
+              : h("p", { class: "s", text: "No longer waiting (page was reloaded)." }));
+      }
+    });
+    if (!items.length) items = [h("div", { class: "chat-empty" }, h("p", { text: "Try:" }), h("ul", null, [
+      "Add a past event: Founders Dinner at The Loft, Brooklyn, last Friday at 7. Maya Chen hosted; Jordan Ellis and Sam Ortiz came. Write it up from these notes: …",
+      "Here’s our guest list (paste names and emails). Add them all to People.",
+      "Who should Maya Chen meet next?",
+      "Which past events still need a write-up?",
+    ].map(function (t) { return h("li", null, h("button", { type: "button", class: "link", text: t, onclick: function () { var a = $("ask"); a.value = t; a.focus(); } })); })))];
+    if (busy) items.push(h("div", { class: "msg bot thinking" }, h("span", { class: "dots", "aria-label": "Working" }, h("i"), h("i"), h("i"))));
+    fill(assistantView, items);
+    var form = assistantView.parentNode && assistantView.parentNode.querySelector(".composer button[type=submit]");
+    if (form) { form.disabled = busy; form.textContent = busy ? "Working…" : "Send"; }
+    assistantView.scrollTop = assistantView.scrollHeight;
+    if (assistantView.lastChild && assistantView.lastChild.scrollIntoView && document.activeElement && document.activeElement.id !== "ask") assistantView.lastChild.scrollIntoView({ block: "nearest" });
+  }
+
   // Routing -----------------------------------------------------------------------------------------
 
-  var TABS = { start: startTab, events: eventsTab, people: peopleTab, connections: connectionsTab, partners: partnersTab, content: contentTab, admins: adminsTab };
+  var TABS = { start: startTab, assistant: assistantTab, events: eventsTab, people: peopleTab, connections: connectionsTab, partners: partnersTab, content: contentTab, admins: adminsTab };
   var lastTab = null;
   function render() {
     var parts = (location.hash.replace(/^#/, "") || "start").split("/");

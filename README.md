@@ -6,7 +6,9 @@ Data lives in the site's Supabase project.
 
 ## Manage (`/manage/`)
 
-The admin side of the site. Admins sign in with their site account and land on a Start screen with the common jobs:
+The admin side of the site. Admins sign in with their site account and land on a Start screen with a box for the assistant and the common jobs.
+
+- **Assistant**: tell it what happened in plain words, paste notes or guest lists, add photos. It finds or creates the event and the people, writes the summary and the story in Creative Endeavors' voice (from your notes and photos only, never invented), records who was there, attaches photos, makes connections and suggests who should meet. Anything that changes the public website (publishing, website words, deleting) waits for you to press **Approve**. Every step it takes is listed with a link.
 
 - **Add an upcoming event** or **write up a past event**: name, date, place, a cover photo, a one-line summary, the story (what happened, or what to expect), a photo gallery and an RSVP link. Save as a draft, or put it on the website with one button. Each published event gets its own page at `/events/event/?e=<name-and-date>` with the story and photos.
 - **Photos**: drag photos in or pick several at once; they're shrunk in the browser before upload, so phone photos are quick. Any photo can be made the cover.
@@ -31,6 +33,18 @@ The Start screen also lists past events that still need a write-up or photos.
    (Anyone already marked `is_admin` in `ce_members` is made an admin automatically by step 1.)
 3. Go to `/manage/` and sign in. Add further admins from the Admins tab.
 
+## Switching on the assistant (once)
+
+The assistant runs on Claude through a small Supabase Edge Function, [`supabase/functions/ce-assistant`](supabase/functions/ce-assistant/index.ts), which keeps the Anthropic API key secret and only answers signed-in admins. The tools it uses run in the admin's browser with their own permissions.
+
+1. Get an API key at [console.anthropic.com](https://console.anthropic.com) → API Keys.
+2. In the Supabase dashboard: **Edge Functions → Secrets** → add `ANTHROPIC_API_KEY` with that key.
+3. **Edge Functions → Deploy a new function → Via editor**, name it `ce-assistant`, paste in `supabase/functions/ce-assistant/index.ts`, and deploy.
+   (Or with the Supabase CLI: `supabase functions deploy ce-assistant --project-ref rcpdsoqzlihwchariony`.)
+
+Until then the Assistant tab says it isn't switched on yet; everything else works without it.
+Each message costs a few cents of Claude usage (Claude Opus 5.5), billed to that API key.
+
 ## Who can see what
 
 Enforced by row-level security in the database, not by the page:
@@ -45,8 +59,9 @@ The key in `assets/ce.js` is Supabase's public "anon" key, the same one the comm
 
 ## Tests
 
-`supabase/tests/manage_test.sql` checks those rules and the connection functions. Run it against a test database with the migration applied
-(see the comment at the top of the file); it rolls back and prints `All manage checks passed`.
+- `supabase/tests/manage_test.sql` checks those rules and the connection functions. Run it against a test database with the migration applied
+  (see the comment at the top of the file); it rolls back and prints `All manage checks passed`.
+- `tests/manage-ui.cjs` drives `/manage/` (including the assistant, with a scripted stand-in for Claude) and the public pages in a browser; see the comment at its top.
 
 ## Wiring more text to Site text
 
