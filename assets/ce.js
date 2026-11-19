@@ -1,7 +1,9 @@
 /* Creative Endeavors: the site's connection to its database (Supabase).
    This is the one place the database address and key live; every page uses
    these two lines. The key is the public "publishable" key: it can only do
-   what the rules in supabase/setup.sql allow, so it's safe in a web page. */
+   what the rules in supabase/setup.sql allow, so it's safe in a web page.
+   Pages load this file as ce.js?v=2. When you change it, raise that number on
+   every page (search for "ce.js?v=") so browsers fetch the new copy at once. */
 (function () {
   var URL = "https://rcdjuxqojwcxfkdziwzw.supabase.co";
   var KEY = "sb_publishable_EGdeiS4rcz_5HL_CAR4BQg_OvRiT6FM";
