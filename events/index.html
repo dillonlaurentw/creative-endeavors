@@ -166,7 +166,7 @@ main.events { align-self: start; }
 .about { margin: 8px 0 0; text-wrap: pretty; }
 .rsvp { display: inline-block; margin-top: 8px; text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
 .past .title, .past .where { color: var(--muted); }
-.empty { margin: 16px 0 0; color: var(--muted); }
+.empty { margin: 16px 0 0; color: var(--muted); list-style: none; }
 @media (min-width: 1024px) { .title { font-size: 20px; } .section { font-size: 14px; } }
 </style>
 </head>
@@ -189,15 +189,15 @@ main.events { align-self: start; }
     </div>
   </header>
   <main class="events">
-    <h1 class="lede">Events.</h1>
-    <p class="intro">Gatherings, conversations and experiences for people building creative endeavors.</p>
+    <h1 class="lede" data-content="events.lede">Events.</h1>
+    <p class="intro" data-content="events.intro">Gatherings, conversations and experiences for people building creative endeavors.</p>
     <h2 class="section">Upcoming</h2>
-    <ul class="list" id="upcoming"></ul>
+    <ul class="list" id="upcoming"><li class="empty">Loading…</li></ul>
     <h2 class="section">Past</h2>
     <ul class="list" id="past"></ul>
   </main>
   <footer>
-    <p class="epigraph">&ldquo;I can either spend my time designing the candle or I can spend my time designing the room that it sits in.&rdquo; &mdash;&nbsp;Virgil&nbsp;Abloh</p>
+    <p class="epigraph" data-content="home.epigraph">&ldquo;I can either spend my time designing the candle or I can spend my time designing the room that it sits in.&rdquo; &mdash;&nbsp;Virgil&nbsp;Abloh</p>
     <p>&copy; 2026 Creative Endeavors</p>
   </footer>
 </div>
@@ -216,28 +216,25 @@ main.events { align-self: start; }
   document.addEventListener("click", function (e) { if (!menu.hidden && !nav.contains(e.target)) set(false); });
 })();
 </script>
+<script src="/assets/ce.js"></script>
 <script>
-/* The events. Add one per gathering; the page sorts them into Upcoming and Past by date.
-   date: "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM" (local time). end, place, city, about and link are optional.
-   An event stays under Upcoming until its end (or, without one, until the end of its day). */
-var EVENTS = [
-  // { title: "Name of the event", date: "2026-12-10T19:00", end: "2026-12-10T22:00", place: "Venue", city: "City", about: "One or two sentences.", link: "https://…" },
-];
-
+/* Events come from /manage/ → Events (published ones only). Upcoming lists
+   the soonest first and keeps an event until it ends (or, with no end time,
+   until the end of its day); Past lists the latest first. */
 (function () {
-  function parse(s) { return s ? new Date(s.length === 10 ? s + "T00:00" : s) : null; }
+  var dateOpts = { weekday: "short", month: "long", day: "numeric", year: "numeric" };
   function finish(e) {
-    var end = parse(e.end);
-    if (end) return e.end.length === 10 ? new Date(end.getTime() + 864e5) : end;
-    var d = parse(e.date);
-    return e.date.length === 10 ? new Date(d.getTime() + 864e5) : new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+    if (e.ends_at) return new Date(e.ends_at);
+    var d = new Date(e.starts_at);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
   }
   function when(e) {
-    var d = parse(e.date), opts = { weekday: "short", month: "long", day: "numeric", year: "numeric" };
-    var s = d.toLocaleDateString("en-US", opts);
-    if (e.date.length > 10) s += " · " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-    var end = parse(e.end);
-    if (end && end.toDateString() !== d.toDateString()) s += " – " + end.toLocaleDateString("en-US", opts);
+    var d = new Date(e.starts_at);
+    var s = d.toLocaleDateString("en-US", dateOpts) + " · " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    if (e.ends_at) {
+      var end = new Date(e.ends_at);
+      if (end.toDateString() !== d.toDateString()) s += " – " + end.toLocaleDateString("en-US", dateOpts);
+    }
     return s;
   }
   function el(tag, cls, text) { var n = document.createElement(tag); n.className = cls; if (text) n.textContent = text; return n; }
@@ -245,24 +242,35 @@ var EVENTS = [
     var li = el("li", "event" + (past ? " past" : ""));
     li.appendChild(el("p", "when", when(e)));
     li.appendChild(el("h3", "title", e.title));
-    var where = [e.place, e.city].filter(Boolean).join(", ");
+    var where = [e.venue, e.city].filter(Boolean).join(", ");
     if (where) li.appendChild(el("p", "where", where));
-    if (e.about) li.appendChild(el("p", "about", e.about));
-    if (e.link && /^https?:\/\//.test(e.link)) {
+    if (e.description) li.appendChild(el("p", "about", e.description));
+    if (e.link && /^https?:\/\//i.test(e.link)) {
       var a = el("a", "rsvp", past ? "More" : "Details & RSVP"); a.href = e.link; a.rel = "noopener"; li.appendChild(a);
     }
     return li;
   }
   function fill(id, list, past, empty) {
     var ul = document.getElementById(id);
-    if (!list.length) { var p = el("p", "empty", empty); ul.replaceWith(p); return; }
+    ul.replaceChildren();
+    if (!list.length) { ul.appendChild(el("li", "empty", empty)); return; }
     list.forEach(function (e) { ul.appendChild(item(e, past)); });
   }
-  var now = new Date(), ok = EVENTS.filter(function (e) { return e && e.title && parse(e.date) && !isNaN(parse(e.date)); });
-  var up = ok.filter(function (e) { return finish(e) > now; }).sort(function (a, b) { return parse(a.date) - parse(b.date); });
-  var past = ok.filter(function (e) { return finish(e) <= now; }).sort(function (a, b) { return parse(b.date) - parse(a.date); });
-  fill("upcoming", up, false, "Nothing announced yet. Write to hello@creativeendeavors.xyz to hear first.");
-  fill("past", past, true, "Past events will appear here.");
+  function show(rows) {
+    var now = new Date();
+    var up = rows.filter(function (e) { return finish(e) > now; });
+    var past = rows.filter(function (e) { return finish(e) <= now; }).reverse();
+    fill("upcoming", up, false, "Nothing announced yet. Write to hello@creativeendeavors.xyz to hear first.");
+    fill("past", past, true, "Past events will appear here.");
+  }
+  CE.get("ce_events?select=title,kind,starts_at,ends_at,venue,city,description,link&published=is.true&order=starts_at.asc")
+    .then(show)
+    .catch(function () {
+      fill("upcoming", [], false, "Events couldn\u2019t be loaded. Please try again shortly.");
+      fill("past", [], true, "");
+      document.getElementById("past").replaceChildren();
+    });
+  CE.applyContent();
 })();
 </script>
 </body>

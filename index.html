@@ -129,7 +129,7 @@ footer .epigraph {
   main { max-width: 34rem; }
   .lede { font-size: 28px; letter-spacing: -0.015em; }
   .intro { margin-top: 18px; font-size: 17px; }
-  .lede + .intro { margin-top: 24px; }
+  .intros > .intro:first-child { margin-top: 24px; }
   /* Header and footer step up too, staying a notch below the middle text. */
   .page {
     padding-block: 40px;
@@ -175,14 +175,16 @@ footer .epigraph {
     </div>
   </header>
   <main>
-    <h1 class="lede">A think tank for creatives.</h1>
+    <h1 class="lede" data-content="home.lede">A think tank for creatives.</h1>
+    <div class="intros" data-content="home.intro" data-content-paragraphs="intro">
     <p class="intro">Creative Endeavors is an independent organization founded on the belief that creativity is fundamental to shaping the future of business, technology, and culture.</p>
     <p class="intro">We bring together individuals who challenge convention, pursue original ideas, and see entrepreneurship as a form of creative expression.</p>
     <p class="intro">Through community, curated experiences, and entrepreneurial initiatives, Creative Endeavors creates opportunities for people, ideas, and resources to come together.</p>
     <p class="intro">Our purpose is to support the next generation of creative entrepreneurs and the endeavors they pursue.</p>
+    </div>
   </main>
   <footer>
-    <p class="epigraph">&ldquo;I can either spend my time designing the candle or I can spend my time designing the room that it sits in.&rdquo; &mdash;&nbsp;Virgil&nbsp;Abloh</p>
+    <p class="epigraph" data-content="home.epigraph">&ldquo;I can either spend my time designing the candle or I can spend my time designing the room that it sits in.&rdquo; &mdash;&nbsp;Virgil&nbsp;Abloh</p>
     <p>&copy; 2026 Creative Endeavors</p>
   </footer>
 </div>
@@ -201,5 +203,7 @@ footer .epigraph {
   document.addEventListener("click", function (e) { if (!menu.hidden && !nav.contains(e.target)) set(false); });
 })();
 </script>
+<script src="/assets/ce.js"></script>
+<script>CE.applyContent();</script>
 </body>
 </html>
