@@ -3,7 +3,7 @@
    these two lines. The key is the public "publishable" key: it can only do
    what the rules in supabase/setup.sql allow, so it's safe in a web page. */
 (function () {
-  var URL = "https://project-ref.supabase.co";
+  var URL = "https://rcdjuxqojwcxfkdziwzw.supabase.co";
   var KEY = "sb_publishable_EGdeiS4rcz_5HL_CAR4BQg_OvRiT6FM";
 
   function get(path) {
