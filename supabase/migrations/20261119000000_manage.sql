@@ -169,6 +169,38 @@ create table if not exists public.ce_site_content (
   updated_at timestamptz not null default now()
 );
 
+-- Photos and write-ups -----------------------------------------------------------
+
+-- Each event gets a web address (/events/event/?e=<slug>), a cover photo, a
+-- gallery, and its story: what happened (past) or what to expect (upcoming).
+alter table public.ce_events add column if not exists slug      text;
+alter table public.ce_events add column if not exists cover_url text check (cover_url is null or cover_url ~* '^https?://');
+alter table public.ce_events add column if not exists photos    text[] not null default '{}';
+alter table public.ce_events add column if not exists story     text check (story is null or length(story) <= 20000);
+create unique index if not exists ce_events_slug on public.ce_events (slug);
+alter table public.ce_people add column if not exists photo_url text check (photo_url is null or photo_url ~* '^https?://');
+
+-- "Opening Salon" on 12 Sep 2026 → opening-salon-2026-09-12 (made unique).
+create or replace function public.ce_events_slug()
+returns trigger
+language plpgsql
+as $$
+declare base text; candidate text; n int := 1;
+begin
+  if new.slug is not null and new.slug <> '' and (tg_op = 'INSERT' or new.slug = old.slug) then
+    return new;
+  end if;
+  base := trim(both '-' from regexp_replace(lower(new.title), '[^a-z0-9]+', '-', 'g'));
+  base := left(coalesce(nullif(base, ''), 'event'), 60) || '-' || to_char(new.starts_at at time zone 'UTC', 'YYYY-MM-DD');
+  candidate := base;
+  while exists (select 1 from public.ce_events where slug = candidate and id <> new.id) loop
+    n := n + 1; candidate := base || '-' || n;
+  end loop;
+  new.slug := candidate;
+  return new;
+end;
+$$;
+
 -- Triggers --------------------------------------------------------------------
 
 drop trigger if exists ce_events_touch on public.ce_events;
@@ -179,6 +211,10 @@ drop trigger if exists ce_partners_touch on public.ce_partners;
 create trigger ce_partners_touch before update on public.ce_partners for each row execute function public.ce_touch();
 drop trigger if exists ce_site_content_touch on public.ce_site_content;
 create trigger ce_site_content_touch before update on public.ce_site_content for each row execute function public.ce_touch();
+drop trigger if exists ce_events_slug on public.ce_events;
+create trigger ce_events_slug before insert or update of title, starts_at, slug on public.ce_events for each row
+  when (new.slug is null or new.slug = '') execute function public.ce_events_slug();
+update public.ce_events set slug = null where slug is null;
 drop trigger if exists ce_connections_order on public.ce_connections;
 create trigger ce_connections_order before insert or update on public.ce_connections for each row execute function public.ce_connections_order();
 
@@ -365,3 +401,27 @@ revoke all on function public.ce_add_admin(text) from public, anon;
 revoke all on function public.ce_remove_admin(uuid) from public, anon;
 grant execute on function public.ce_add_admin(text) to authenticated;
 grant execute on function public.ce_remove_admin(uuid) to authenticated;
+
+-- Photo storage -------------------------------------------------------------------
+
+-- One public bucket for event photos, people's photos and partner logos.
+-- Anyone can view a photo by its link; only admins can upload or remove.
+-- Uploads are resized in the browser first; 15 MB is a backstop.
+do $$
+begin
+  if to_regclass('storage.buckets') is not null then
+    insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+    values ('ce-photos', 'ce-photos', true, 15728640, array['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
+    on conflict (id) do update set public = true, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+
+    execute 'drop policy if exists ce_photos_admin_insert on storage.objects';
+    execute 'drop policy if exists ce_photos_admin_update on storage.objects';
+    execute 'drop policy if exists ce_photos_admin_delete on storage.objects';
+    execute $p$create policy ce_photos_admin_insert on storage.objects for insert to authenticated
+      with check (bucket_id = 'ce-photos' and public.ce_is_admin())$p$;
+    execute $p$create policy ce_photos_admin_update on storage.objects for update to authenticated
+      using (bucket_id = 'ce-photos' and public.ce_is_admin()) with check (bucket_id = 'ce-photos' and public.ce_is_admin())$p$;
+    execute $p$create policy ce_photos_admin_delete on storage.objects for delete to authenticated
+      using (bucket_id = 'ce-photos' and public.ce_is_admin())$p$;
+  end if;
+end $$;

@@ -1,33 +1,30 @@
 /* Creative Endeavors · Manage
-   Edit events, people, who came to what, connections, partners, the words on
-   the public pages, and who the admins are. Everything goes straight to the
-   site's Supabase database; row-level security there (supabase/migrations)
-   is what actually keeps it admin-only. This page just hides itself from
-   anyone who isn't an admin. All text from the database is written with
-   textContent, never as HTML. */
+   The admin side of the site: events (with photos and write-ups), people,
+   who came to what, connections, partners, the words on the public pages,
+   and admins. Everything is saved straight to the site's Supabase database;
+   its row-level security (supabase/migrations) is what keeps it admin-only.
+   Text from the database is always written with textContent, never as HTML. */
 (function () {
   "use strict";
 
   var sb = window.supabase.createClient(CE.url, CE.key, { auth: { storage: window.localStorage, persistSession: true, autoRefreshToken: true } });
-  var me = null;            // signed-in user
-  var people = [];          // all people, by first name
-  var events = [];          // all events, newest first
-  var personById = {}, eventById = {};
+  var BUCKET = "ce-photos";
+  var me = null;
+  var people = [], events = [], personById = {}, eventById = {};
 
   var ROLES = ["host", "speaker", "performer", "artist", "attendee", "volunteer", "partner"];
   var KINDS = ["met", "collaborated", "introduced", "mentor", "friends"];
   var CONTENT = [
-    { key: "home.lede", name: "Home: headline", hint: "A think tank for creatives." },
-    { key: "home.intro", name: "Home: what we are", hint: "Paragraphs, separated by a blank line.", long: true },
-    { key: "home.epigraph", name: "Quote at the foot of every page", hint: "“I can either spend my time designing the candle…” — Virgil Abloh", long: true },
-    { key: "events.lede", name: "Events: headline", hint: "Events." },
-    { key: "events.intro", name: "Events: introduction", hint: "Gatherings, conversations and experiences for people building creative endeavors.", long: true },
+    { key: "home.lede", name: "Homepage headline", hint: "A think tank for creatives." },
+    { key: "home.intro", name: "Homepage text", hint: "Paragraphs, with a blank line between them.", long: true, rows: 9 },
+    { key: "home.epigraph", name: "Quote at the bottom of every page", hint: "“I can either spend my time designing the candle…” — Virgil Abloh", long: true },
+    { key: "events.lede", name: "Events page headline", hint: "Events." },
+    { key: "events.intro", name: "Events page introduction", hint: "Gatherings, conversations and experiences for people building creative endeavors.", long: true },
   ];
 
-  // Little helpers ------------------------------------------------------------
+  // Helpers ----------------------------------------------------------------------
 
   function $(id) { return document.getElementById(id); }
-  // h("div", {class: "x", onclick: fn}, child, "text", …)
   function h(tag, attrs) {
     var el = document.createElement(tag);
     if (attrs) Object.keys(attrs).forEach(function (k) {
@@ -47,30 +44,31 @@
     if (Array.isArray(c)) c.forEach(function (x) { add(el, x); });
     else el.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
   }
+  function fill(el, kids) { el.replaceChildren(); add(el, kids); return el; }
   var statusTimer;
   function say(text, kind) {
     var s = $("status");
     s.textContent = text || "";
-    s.className = "status" + (kind ? " " + kind : "");
+    s.className = "status" + (kind ? " " + kind : "") + (text ? " show" : "");
     clearTimeout(statusTimer);
-    if (kind === "ok") statusTimer = setTimeout(function () { s.textContent = ""; s.className = "status"; }, 4000);
+    if (kind === "ok") statusTimer = setTimeout(function () { s.className = "status"; }, 3500);
   }
   function fail(err, what) {
     console.error(err);
     var msg = (err && err.message) || "Something went wrong.";
     if (err && err.code === "23505") msg = "That already exists.";
-    if (err && err.code === "23514") msg = "Something in the form isn’t valid (check links start with https://, and emails).";
-    if (err && (err.code === "42501" || /row-level security/i.test(msg))) msg = "You don’t have permission to do that.";
+    if (err && err.code === "23514") msg = "Something isn’t valid. Links need to start with https://.";
+    if (err && (err.code === "42501" || /row-level security|Unauthorized/i.test(msg))) msg = "You don’t have permission to do that.";
     say((what ? what + ": " : "") + msg, "error");
   }
   function fullName(p) { return p ? [p.first_name, p.last_name].filter(Boolean).join(" ") : "Someone removed"; }
+  function splitName(s) { s = s.trim().replace(/\s+/g, " "); var i = s.indexOf(" "); return i < 0 ? { first_name: s, last_name: null } : { first_name: s.slice(0, i), last_name: s.slice(i + 1) }; }
   function fmtDate(iso, withTime) {
     if (!iso) return "";
     var d = new Date(iso);
     var s = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
     return withTime ? s + " · " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : s;
   }
-  // ISO ↔ <input type="datetime-local">, in the admin's own time zone.
   function toLocalInput(iso) {
     if (!iso) return "";
     var d = new Date(iso), p = function (n) { return String(n).padStart(2, "0"); };
@@ -78,22 +76,28 @@
   }
   function fromLocalInput(v) { return v ? new Date(v).toISOString() : null; }
   function list(v) { return (v || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean); }
-  function lines(v) { return (v || "").split(/\n|,\s*(?=https?:)/).map(function (s) { return s.trim(); }).filter(Boolean); }
+  function lines(v) { return (v || "").split(/\n/).map(function (s) { return s.trim(); }).filter(Boolean); }
   function clean(v) { v = (v == null ? "" : String(v)).trim(); return v === "" ? null : v; }
   function isPast(e) { var end = e.ends_at ? new Date(e.ends_at) : new Date(new Date(e.starts_at).setHours(23, 59, 59, 999)); return end < new Date(); }
   function matches(q, parts) { q = q.trim().toLowerCase(); return !q || parts.join(" ").toLowerCase().indexOf(q) !== -1; }
+  function initials(p) { return ((p.first_name || "?")[0] + ((p.last_name || "")[0] || "")).toUpperCase(); }
+  function avatar(p, size) {
+    var cls = "avatar" + (size ? " " + size : "");
+    return p && p.photo_url ? h("img", { class: cls, src: p.photo_url, alt: "" }) : h("span", { class: cls, "aria-hidden": "true", text: p ? initials(p) : "?" });
+  }
+  function eventUrl(e) { return "/events/event/?e=" + encodeURIComponent(e.slug || e.id); }
 
-  // People and events are picked by typing a name (with suggestions).
+  // People and events are picked by typing a name.
   function personLabel(p) {
     var same = people.filter(function (x) { return fullName(x) === fullName(p); }).length > 1;
     return fullName(p) + (same ? " (" + (p.email || p.city || p.id.slice(0, 6)) + ")" : "");
   }
   function eventLabel(e) { return e.title + " · " + fmtDate(e.starts_at); }
   function refreshPickers() {
-    $("dl-people").replaceChildren.apply($("dl-people"), people.map(function (p) { return h("option", { value: personLabel(p) }); }));
-    $("dl-events").replaceChildren.apply($("dl-events"), events.map(function (e) { return h("option", { value: eventLabel(e) }); }));
+    fill($("dl-people"), people.map(function (p) { return h("option", { value: personLabel(p) }); }));
+    fill($("dl-events"), events.map(function (e) { return h("option", { value: eventLabel(e) }); }));
   }
-  function findPerson(label) { label = label.trim(); return people.find(function (p) { return personLabel(p) === label; }) || people.find(function (p) { return fullName(p).toLowerCase() === label.toLowerCase(); }); }
+  function findPerson(label) { label = label.trim(); var l = label.toLowerCase(); return people.find(function (p) { return personLabel(p) === label; }) || people.find(function (p) { return fullName(p).toLowerCase() === l; }); }
   function findEvent(label) { label = label.trim(); return events.find(function (e) { return eventLabel(e) === label; }) || events.find(function (e) { return e.title.toLowerCase() === label.toLowerCase(); }); }
 
   function loadPeople() {
@@ -113,109 +117,117 @@
     });
   }
 
-  // Generic editor: a form built from a list of fields -------------------------
+  // Photos ------------------------------------------------------------------------
 
-  function field(f, row) {
-    var id = "f-" + f.name, v = row ? row[f.name] : f.default;
-    var input;
-    if (f.type === "textarea") input = h("textarea", { id: id, name: f.name, rows: f.rows || 4, maxlength: f.max, placeholder: f.placeholder }, v || "");
-    else if (f.type === "checkbox") return h("div", { class: "field" + (f.wide ? " wide" : "") }, h("span", { class: "label", text: " " }), h("label", { class: "check" }, h("input", { id: id, name: f.name, type: "checkbox", checked: v }), f.label));
-    else if (f.type === "datetime") input = h("input", { id: id, name: f.name, type: "datetime-local", value: toLocalInput(v), required: f.required });
-    else if (f.type === "list") input = h("input", { id: id, name: f.name, type: "text", value: (v || []).join(", "), placeholder: f.placeholder });
-    else if (f.type === "lines") input = h("textarea", { id: id, name: f.name, rows: 3, placeholder: f.placeholder }, (v || []).join("\n"));
-    else input = h("input", { id: id, name: f.name, type: f.type || "text", value: v == null ? "" : v, required: f.required, maxlength: f.max, placeholder: f.placeholder, list: f.list, inputmode: f.inputmode });
-    return h("div", { class: "field" + (f.wide ? " wide" : "") }, h("label", { for: id, text: f.label + (f.required ? "" : "") }), input, f.help ? h("p", { class: "help", text: f.help }) : null);
-  }
-  function readForm(form, fields) {
-    var out = {};
-    fields.forEach(function (f) {
-      var el = form.elements[f.name];
-      if (f.type === "checkbox") out[f.name] = el.checked;
-      else if (f.type === "datetime") out[f.name] = fromLocalInput(el.value);
-      else if (f.type === "list") out[f.name] = list(el.value);
-      else if (f.type === "lines") out[f.name] = lines(el.value);
-      else if (f.type === "number") out[f.name] = el.value === "" ? 0 : Number(el.value);
-      else out[f.name] = clean(el.value);
+  // Shrinks a photo to at most 2000px on its long side (a JPEG, about 0.3–1 MB)
+  // before upload, so phone photos upload quickly. Falls back to the original.
+  function shrink(file) {
+    if (!/^image\/(jpeg|png|webp|heic|heif)$/i.test(file.type) && !/\.(jpe?g|png|webp|heic|heif)$/i.test(file.name)) return Promise.resolve(file);
+    return new Promise(function (resolve) {
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () {
+        var max = 2000, w = img.naturalWidth, hgt = img.naturalHeight, k = Math.min(1, max / Math.max(w, hgt));
+        var c = document.createElement("canvas"); c.width = Math.round(w * k); c.height = Math.round(hgt * k);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob(function (b) { resolve(b && (b.size < file.size || !/jpe?g/i.test(file.type)) ? b : file); }, "image/jpeg", 0.85);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
     });
-    return out;
   }
-  // Save/delete wiring shared by events, people and partners.
-  function editor(opts) {
-    var row = opts.row;
-    var form = h("form", { class: "fields", novalidate: false }, opts.fields.map(function (f) { return field(f, row); }));
-    var saveBtn = h("button", { class: "btn", type: "submit", text: row ? "Save" : opts.createText || "Add" });
-    form.appendChild(h("div", { class: "actions" }, saveBtn,
-      row ? null : h("button", { class: "btn ghost", type: "button", text: "Cancel", onclick: function () { location.hash = "#" + opts.tab; } }),
-      h("span", { class: "spacer" }),
-      row ? h("button", { class: "link danger", type: "button", text: "Delete", onclick: function () {
-        if (!confirm(opts.confirmDelete(row))) return;
-        sb.from(opts.table).delete().eq("id", row.id).then(function (r) {
-          if (r.error) return fail(r.error, "Couldn’t delete");
-          say("Deleted.", "ok");
-          Promise.resolve(opts.after && opts.after()).then(function () { location.hash = "#" + opts.tab; render(); });
-        });
-      } }) : null));
-    form.addEventListener("submit", function (ev) {
-      ev.preventDefault();
-      if (!form.reportValidity()) return;
-      var data = readForm(form, opts.fields);
-      if (opts.check) { var problem = opts.check(data); if (problem) return say(problem, "error"); }
-      saveBtn.disabled = true;
-      var q = row ? sb.from(opts.table).update(data).eq("id", row.id).select().single() : sb.from(opts.table).insert(data).select().single();
-      q.then(function (r) {
-        saveBtn.disabled = false;
-        if (r.error) return fail(r.error, "Couldn’t save");
-        say(row ? "Saved." : "Added.", "ok");
-        Promise.resolve(opts.after && opts.after()).then(function () {
-          if (row) render(); else location.hash = "#" + opts.tab + "/" + r.data.id;
-        });
+  function upload(file, folder) {
+    return shrink(file).then(function (blob) {
+      var ext = blob.type === "image/jpeg" ? "jpg" : (blob.type.split("/")[1] || "jpg");
+      var path = folder + "/" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8) + "." + ext;
+      return sb.storage.from(BUCKET).upload(path, blob, { contentType: blob.type || "image/jpeg", cacheControl: "31536000" }).then(function (r) {
+        if (r.error) throw r.error;
+        return sb.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
       });
     });
-    return form;
+  }
+  // A drop zone: click to choose, or drag photos onto it.
+  function dropzone(label, multiple, onFiles) {
+    var input = h("input", { type: "file", accept: "image/*", multiple: multiple, hidden: true });
+    var zone = h("button", { type: "button", class: "drop" }, h("span", { class: "drop-icon", "aria-hidden": "true", text: "+" }), h("span", { text: label }));
+    zone.addEventListener("click", function () { input.click(); });
+    input.addEventListener("change", function () { if (input.files.length) onFiles([].slice.call(input.files)); input.value = ""; });
+    ["dragenter", "dragover"].forEach(function (t) { zone.addEventListener(t, function (e) { e.preventDefault(); zone.classList.add("over"); }); });
+    ["dragleave", "drop"].forEach(function (t) { zone.addEventListener(t, function () { zone.classList.remove("over"); }); });
+    zone.addEventListener("drop", function (e) { e.preventDefault(); var f = [].filter.call(e.dataTransfer.files, function (x) { return /^image\//.test(x.type) || /\.(heic|heif)$/i.test(x.name); }); if (f.length) onFiles(multiple ? f : f.slice(0, 1)); });
+    return h("div", null, zone, input);
+  }
+  function uploadMany(files, folder, done) {
+    var n = 0;
+    say("Uploading " + files.length + " photo" + (files.length === 1 ? "" : "s") + "…");
+    return Promise.all(files.map(function (f) {
+      return upload(f, folder).then(function (u) { n++; say("Uploading… " + n + " of " + files.length); return u; }).catch(function (e) { console.error(e); return null; });
+    })).then(function (urls) {
+      var ok = urls.filter(Boolean);
+      if (ok.length < files.length) say((files.length - ok.length) + " photo" + (files.length - ok.length === 1 ? "" : "s") + " couldn’t be uploaded. Try again, or try a JPEG.", "error");
+      done(ok);
+    });
   }
 
-  // Layout for list + editor tabs.
-  function split(left, right) { return h("div", { class: "split" }, h("section", { "aria-label": "List" }, left), h("section", { class: "panel" }, right)); }
-  var filters = { events: "upcoming", eventsQ: "", peopleQ: "", connQ: "" };
+  // Shared form pieces --------------------------------------------------------------
+
+  function fieldWrap(label, input, opts) {
+    opts = opts || {};
+    return h("div", { class: "field" + (opts.wide ? " wide" : "") }, h("label", { for: input.id, text: label }), input, opts.help ? h("p", { class: "help", text: opts.help }) : null);
+  }
+  function txt(id, value, attrs) { return h("input", Object.assign({ id: id, type: "text", value: value == null ? "" : value }, attrs || {})); }
+  function area(id, value, attrs) { return h("textarea", Object.assign({ id: id, rows: 4 }, attrs || {}), value || ""); }
+  function split(left, right) { return h("div", { class: "split" }, h("section", { class: "side-list", "aria-label": "List" }, left), h("section", { class: "panel" }, right)); }
+  var filters = { events: "all", eventsQ: "", peopleQ: "", connQ: "" };
   function searchBox(key, placeholder, rerender) {
     var input = h("input", { type: "search", placeholder: placeholder, value: filters[key], "aria-label": placeholder });
     input.addEventListener("input", function () { filters[key] = input.value; rerender(); });
     return input;
   }
 
-  // Events ----------------------------------------------------------------------
+  // Start -----------------------------------------------------------------------------
 
-  var EVENT_FIELDS = [
-    { name: "title", label: "Title", required: true, max: 200, wide: true },
-    { name: "starts_at", label: "Starts", type: "datetime", required: true },
-    { name: "ends_at", label: "Ends (optional)", type: "datetime" },
-    { name: "kind", label: "Kind", list: "dl-kinds", max: 60, placeholder: "Dinner, salon, workshop…" },
-    { name: "city", label: "City", max: 100 },
-    { name: "venue", label: "Venue", max: 200, wide: true },
-    { name: "description", label: "Description", type: "textarea", max: 4000, wide: true },
-    { name: "link", label: "Link (RSVP or details)", type: "url", placeholder: "https://", wide: true },
-    { name: "image_url", label: "Image link", type: "url", placeholder: "https://", wide: true },
-    { name: "published", label: "Show on the Events page", type: "checkbox", wide: true },
-  ];
+  function startTab() {
+    var upcoming = events.filter(function (e) { return !isPast(e); }).reverse();
+    var needWriteUp = events.filter(function (e) { return isPast(e) && (!e.story || !(e.photos || []).length && !e.cover_url); });
+    var drafts = events.filter(function (e) { return !e.published; });
+    function card(href, title, text) { return h("a", { class: "card", href: href }, h("span", { class: "card-t", text: title }), h("span", { class: "card-s", text: text })); }
+    function evRow(e, note) {
+      return h("li", null, h("a", { class: "ev-row", href: "#events/" + e.id }, e.cover_url ? h("img", { class: "thumb", src: e.cover_url, alt: "" }) : h("span", { class: "thumb blank", "aria-hidden": "true" }),
+        h("span", { class: "main" }, h("span", { class: "t", text: e.title }), h("span", { class: "s", text: fmtDate(e.starts_at) + (note ? " · " + note : "") }))));
+    }
+    var first = (me && me.email || "").split("@")[0];
+    return h("div", { class: "start" },
+      h("h1", { class: "hello", text: "What would you like to do?" }),
+      h("div", { class: "cards" },
+        card("#events/new", "Add an upcoming event", "Name, date, place and a photo. Publish it when you’re ready."),
+        card("#events/new-past", "Write up a past event", "Tell the story of what happened and add the photos."),
+        card("#people/new", "Add people", "One person, or paste a whole list of names at once."),
+        card("#content", "Change the website words", "The homepage headline, text and the quote.")),
+      needWriteUp.length ? [h("h3", { text: "Past events that need a write-up or photos" }), h("ul", { class: "ev-list" }, needWriteUp.slice(0, 6).map(function (e) { return evRow(e, !e.story ? "no story yet" : "no photos yet"); }))] : null,
+      upcoming.length ? [h("h3", { text: "Coming up" }), h("ul", { class: "ev-list" }, upcoming.slice(0, 6).map(function (e) { return evRow(e, e.published ? "on the website" : "draft"); }))] : null,
+      drafts.length && !upcoming.length ? [h("h3", { text: "Drafts" }), h("ul", { class: "ev-list" }, drafts.slice(0, 6).map(function (e) { return evRow(e, "draft"); }))] : null,
+      h("p", { class: "totals", text: events.length + " events · " + people.length + " people" + (first ? " · signed in as " + first : "") }));
+  }
+
+  // Events ------------------------------------------------------------------------------
 
   function eventsTab(id) {
     var listEl = h("ul", { class: "list" });
-    var countEl = h("p", { class: "count" });
     function drawList() {
       var shown = events.filter(function (e) {
         var f = filters.events;
         var keep = f === "all" || (f === "drafts" ? !e.published : f === "past" ? isPast(e) : !isPast(e));
         return keep && matches(filters.eventsQ, [e.title, e.kind || "", e.city || "", e.venue || ""]);
       });
-      if (filters.events === "upcoming") shown = shown.slice().reverse();
-      listEl.replaceChildren.apply(listEl, shown.length ? shown.map(function (e) {
-        return h("li", null, h("a", { class: "row", href: "#events/" + e.id, "aria-current": e.id === id ? "true" : null },
-          h("span", { class: "t" }, e.title, e.published ? null : h("span", { class: "badge", text: "Draft" })),
-          h("span", { class: "s", text: [fmtDate(e.starts_at, true), e.city].filter(Boolean).join(" · ") })));
-      }) : [h("li", { class: "empty", text: events.length ? "No events match." : "No events yet. Add the first one." })]);
-      countEl.textContent = shown.length + " of " + events.length + " events";
+      fill(listEl, shown.length ? shown.map(function (e) {
+        return h("li", null, h("a", { class: "row ev-row", href: "#events/" + e.id, "aria-current": e.id === id ? "true" : null },
+          e.cover_url ? h("img", { class: "thumb", src: e.cover_url, alt: "" }) : h("span", { class: "thumb blank", "aria-hidden": "true" }),
+          h("span", { class: "main" }, h("span", { class: "t" }, e.title, e.published ? null : h("span", { class: "badge", text: "Draft" })),
+            h("span", { class: "s", text: fmtDate(e.starts_at) + (isPast(e) ? "" : " · upcoming") }))));
+      }) : h("li", { class: "empty", text: events.length ? "No events match." : "No events yet." }));
     }
-    var chips = h("div", { class: "chips", role: "group", "aria-label": "Show" }, [["upcoming", "Upcoming"], ["past", "Past"], ["drafts", "Drafts"], ["all", "All"]].map(function (c) {
+    var chips = h("div", { class: "chips", role: "group", "aria-label": "Show" }, [["all", "All"], ["upcoming", "Upcoming"], ["past", "Past"], ["drafts", "Drafts"]].map(function (c) {
       return h("button", { class: "chip", type: "button", "aria-pressed": String(filters.events === c[0]), text: c[1], onclick: function (ev) {
         filters.events = c[0];
         chips.querySelectorAll(".chip").forEach(function (b) { b.setAttribute("aria-pressed", String(b === ev.currentTarget)); });
@@ -223,193 +235,371 @@
       } });
     }));
     drawList();
-    var left = [h("div", { class: "toolbar" }, searchBox("eventsQ", "Search events", drawList), h("a", { class: "btn", href: "#events/new", text: "New event", role: "button" })), chips, listEl, countEl];
-
+    var left = [h("div", { class: "toolbar" }, h("a", { class: "btn", href: "#events/new", text: "+ New event" }), searchBox("eventsQ", "Search", drawList)), chips, listEl];
     var right;
-    if (id === "new") right = [h("h2", { text: "New event" }), editor({ table: "ce_events", tab: "events", fields: EVENT_FIELDS, createText: "Add event", after: loadEvents, check: checkEvent })];
-    else if (id && eventById[id]) right = eventPanel(eventById[id]);
-    else if (id) right = [h("p", { class: "blank", text: "That event doesn’t exist any more." })];
-    else right = [h("p", { class: "blank", text: "Choose an event, or add a new one. Past events can be added too: they show under Past on the Events page." })];
+    if (id === "new" || id === "new-past") right = eventEditor(null, id === "new-past");
+    else if (id && eventById[id]) right = eventEditor(eventById[id]);
+    else if (id) right = h("p", { class: "blank", text: "That event doesn’t exist any more." });
+    else right = h("div", { class: "blank" }, h("p", { text: "Pick an event to edit it, or add a new one." }), h("p", null, h("a", { class: "btn ghost", href: "#events/new-past", text: "Write up a past event" })));
     return split(left, right);
   }
-  function checkEvent(d) { if (d.ends_at && d.starts_at && d.ends_at < d.starts_at) return "The end has to be after the start."; }
 
-  function eventPanel(e) {
-    var who = h("ul", { class: "items" });
-    var panel = [
-      h("h2", { text: e.title }),
-      h("p", { class: "hint", text: (e.published ? "On the Events page" : "Draft: not on the Events page") + " · " + (isPast(e) ? "Past" : "Upcoming") }),
-      editor({ table: "ce_events", tab: "events", row: e, fields: EVENT_FIELDS, after: loadEvents, check: checkEvent, confirmDelete: function () { return "Delete “" + e.title + "”? Who came to it is deleted too; connections made there are kept."; } }),
-      h("h3", { text: "Who was there" }),
-      h("p", { class: "hint", text: isPast(e) ? "Everyone who came, and in what role." : "Hosts, speakers and who’s coming." }),
-      who,
-    ];
-    var personIn = h("input", { type: "text", list: "dl-people", placeholder: "Type a name", "aria-label": "Person" });
-    var roleIn = h("select", { "aria-label": "Role" }, ROLES.map(function (r) { return h("option", { value: r, text: r[0].toUpperCase() + r.slice(1), selected: r === "attendee" }); }));
-    var addBtn = h("button", { class: "btn", type: "submit", text: "Add" });
-    var adder = h("form", { class: "adder" }, h("div", { class: "field" }, h("label", { class: "label", text: "Person" }), personIn), h("div", { class: "field" }, h("label", { class: "label", text: "Role" }), roleIn), addBtn);
-    adder.addEventListener("submit", function (ev) {
-      ev.preventDefault();
-      var p = findPerson(personIn.value);
-      if (!p) return say("Pick someone from the list, or add them under People first.", "error");
-      sb.from("ce_event_people").upsert({ event_id: e.id, person_id: p.id, role: roleIn.value }).then(function (r) {
-        if (r.error) return fail(r.error, "Couldn’t add them");
-        personIn.value = ""; say(fullName(p) + " added.", "ok"); draw();
+  function eventEditor(e, pastHint) {
+    var isNew = !e;
+    var state = { cover_url: e ? e.cover_url : null, photos: e ? (e.photos || []).slice() : [] };
+    var past = e ? isPast(e) : !!pastHint;
+    var folder = "events/" + (e ? e.id : "new-" + Date.now().toString(36));
+
+    var title = txt("ev-title", e && e.title, { required: true, maxlength: 200, placeholder: "e.g. Founders Dinner" });
+    var when = h("input", { id: "ev-when", type: "datetime-local", value: e ? toLocalInput(e.starts_at) : "", required: true });
+    var venue = txt("ev-venue", e && e.venue, { maxlength: 200, placeholder: "e.g. The Loft" });
+    var city = txt("ev-city", e && e.city, { maxlength: 100, placeholder: "e.g. Brooklyn" });
+    var summary = txt("ev-summary", e && e.description, { maxlength: 300, placeholder: past ? "e.g. Forty founders, one long table." : "e.g. An evening with creative entrepreneurs." });
+    var story = area("ev-story", e && e.story, { rows: 12, maxlength: 20000, placeholder: past ? "What happened? Who was there, what was talked about, what came out of it. Write as much as you like; leave a blank line between paragraphs." : "What to expect: who it’s for, what will happen, anything to bring." });
+    var link = h("input", { id: "ev-link", type: "url", value: (e && e.link) || "", placeholder: "https://…" });
+    var ends = h("input", { id: "ev-ends", type: "datetime-local", value: e ? toLocalInput(e.ends_at) : "" });
+    var kind = txt("ev-kind", e && e.kind, { list: "dl-kinds", maxlength: 60, placeholder: "Dinner, salon, workshop…" });
+    var storyLabel = h("label", { for: "ev-story", text: past ? "The story: what happened" : "What to expect" });
+    var linkField = fieldWrap(past ? "Link (optional)" : "RSVP or tickets link (optional)", link, { wide: true });
+    function updatePast() {
+      var d = when.value ? new Date(when.value) : null;
+      past = d ? isPast({ starts_at: d.toISOString(), ends_at: fromLocalInput(ends.value) }) : past;
+      storyLabel.textContent = past ? "The story: what happened" : "What to expect";
+      linkField.querySelector("label").textContent = past ? "Link (optional)" : "RSVP or tickets link (optional)";
+    }
+    when.addEventListener("change", updatePast); ends.addEventListener("change", updatePast);
+
+    // Cover photo.
+    var coverBox = h("div", { class: "cover-box" });
+    function drawCover() {
+      fill(coverBox, state.cover_url ? h("div", { class: "cover" }, h("img", { src: state.cover_url, alt: "Cover photo" }),
+        h("div", { class: "cover-actions" }, h("button", { type: "button", class: "btn ghost small", text: "Change", onclick: function () { pick.querySelector("input").click(); } }),
+          h("button", { type: "button", class: "btn ghost small", text: "Remove", onclick: function () { state.cover_url = null; drawCover(); dirty(); } })))
+        : null);
+      pick.hidden = !!state.cover_url;
+      coverBox.appendChild(pick);
+    }
+    var pick = dropzone("Add a cover photo", false, function (files) {
+      uploadMany(files, folder, function (urls) { if (urls[0]) { state.cover_url = urls[0]; drawCover(); dirty(); say("Photo added. Remember to save.", "ok"); } });
+    });
+
+    // Gallery.
+    var gallery = h("div", { class: "gallery" });
+    var galleryDrop = dropzone("Add photos (choose several at once)", true, function (files) {
+      uploadMany(files, folder, function (urls) {
+        if (!urls.length) return;
+        state.photos = state.photos.concat(urls);
+        if (!state.cover_url) { state.cover_url = urls[0]; drawCover(); }
+        drawGallery(); dirty(); say(urls.length + " photo" + (urls.length === 1 ? "" : "s") + " added. Remember to save.", "ok");
       });
     });
-    var connectBtn = h("button", { class: "btn ghost", type: "button", text: "Connect everyone who was there", onclick: function () {
+    function drawGallery() {
+      fill(gallery, state.photos.map(function (u, i) {
+        return h("figure", { class: "ph" }, h("img", { src: u, alt: "", loading: "lazy" }),
+          h("figcaption", null,
+            state.cover_url === u ? h("span", { class: "ph-tag", text: "Cover" }) : h("button", { type: "button", class: "ph-btn", text: "Make cover", onclick: function () { state.cover_url = u; drawCover(); drawGallery(); dirty(); } }),
+            h("button", { type: "button", class: "ph-btn", "aria-label": "Remove photo", text: "Remove", onclick: function () { state.photos.splice(i, 1); if (state.cover_url === u) state.cover_url = state.photos[0] || null; drawCover(); drawGallery(); dirty(); } })));
+      }));
+    }
+
+    var more = h("details", { class: "more wide" }, h("summary", { text: "More details (optional)" }),
+      h("div", { class: "fields inner" }, fieldWrap("Ends", ends), fieldWrap("Kind of event", kind)));
+    var publishedNow = e ? e.published : false;
+    var saveBtn = h("button", { class: "btn", type: "submit", text: isNew ? "Save as draft" : "Save changes" });
+    var pubBtn = h("button", { class: "btn" + (publishedNow ? " ghost" : " accent"), type: "button", text: publishedNow ? "Take off the website" : (isNew ? "Save and put on the website" : "Put on the website") });
+    var unsaved = h("span", { class: "unsaved", hidden: true, text: "Unsaved changes" });
+    function dirty() { unsaved.hidden = false; }
+
+    var form = h("form", { class: "fields", novalidate: true },
+      fieldWrap("Name of the event", title, { wide: true }),
+      fieldWrap("Date and time", when), h("div", { class: "field" }, h("span", { class: "label", text: " " }), h("p", { class: "help", text: past ? "This is a past event: it goes under Past on the website." : "Past dates are fine: they show under Past." })),
+      fieldWrap("Place", venue), fieldWrap("City", city),
+      h("div", { class: "field wide" }, h("span", { class: "label", text: "Cover photo" }), coverBox),
+      fieldWrap("One-line summary", summary, { wide: true, help: "Shown in the list of events." }),
+      h("div", { class: "field wide" }, storyLabel, story),
+      h("div", { class: "field wide" }, h("span", { class: "label", text: "Photos" }), gallery, galleryDrop),
+      linkField, more,
+      h("div", { class: "actions sticky" }, saveBtn, pubBtn, unsaved, h("span", { class: "spacer" }),
+        e && e.published ? h("a", { class: "link", href: eventUrl(e), target: "_blank", rel: "noopener", text: "View on website ↗" }) : null));
+    form.addEventListener("input", dirty);
+
+    function save(publish) {
+      if (!title.value.trim()) { title.focus(); return say("Give the event a name.", "error"); }
+      if (!when.value) { when.focus(); return say("Add the date and time.", "error"); }
+      if (link.value && !/^https?:\/\//i.test(link.value.trim())) { link.focus(); return say("Links need to start with https://", "error"); }
+      if (ends.value && ends.value < when.value) return say("The end has to be after the start.", "error");
+      var data = {
+        title: title.value.trim(), starts_at: fromLocalInput(when.value), ends_at: fromLocalInput(ends.value),
+        venue: clean(venue.value), city: clean(city.value), description: clean(summary.value), story: clean(story.value),
+        link: clean(link.value), kind: clean(kind.value), cover_url: state.cover_url, photos: state.photos,
+      };
+      if (publish !== undefined) data.published = publish;
+      saveBtn.disabled = pubBtn.disabled = true;
+      var q = e ? sb.from("ce_events").update(data).eq("id", e.id).select().single() : sb.from("ce_events").insert(data).select().single();
+      q.then(function (r) {
+        saveBtn.disabled = pubBtn.disabled = false;
+        if (r.error) return fail(r.error, "Couldn’t save");
+        unsaved.hidden = true;
+        say(r.data.published ? (publish ? "It’s on the website now." : "Saved. The website is updated.") : (publish === false ? "Taken off the website. It’s a draft now." : "Saved as a draft."), "ok");
+        loadEvents().then(function () { if (isNew) location.hash = "#events/" + r.data.id; else render(); });
+      });
+    }
+    form.addEventListener("submit", function (ev) { ev.preventDefault(); save(); });
+    pubBtn.addEventListener("click", function () { save(!publishedNow); });
+
+    drawCover(); drawGallery();
+    var out = [h("div", { class: "panel-head" }, h("h2", { text: isNew ? (pastHint ? "Write up a past event" : "New event") : e.title }),
+      e ? h("span", { class: "pill" + (e.published ? " live" : ""), text: e.published ? "On the website" : "Draft" }) : null), form];
+    if (e) {
+      out.push(whoWasThere(e));
+      out.push(h("div", { class: "danger-zone" }, h("button", { class: "link danger", type: "button", text: "Delete this event", onclick: function () {
+        if (!confirm("Delete “" + e.title + "”? This can’t be undone. People stay; the list of who came is removed.")) return;
+        sb.from("ce_events").delete().eq("id", e.id).then(function (r) { if (r.error) return fail(r.error, "Couldn’t delete"); say("Deleted.", "ok"); loadEvents().then(function () { location.hash = "#events"; }); });
+      } })));
+    } else {
+      out.push(h("p", { class: "hint", text: "After saving you can add who was there." }));
+    }
+    return out;
+  }
+
+  // Who was there: type names (new names become new people), pick roles.
+  function whoWasThere(e) {
+    var box = h("section", { class: "who-box" });
+    var listEl = h("ul", { class: "people-chips" });
+    var namesIn = h("input", { id: "who-names", type: "text", list: "dl-people", placeholder: "Type names, separated by commas", autocomplete: "off" });
+    var roleIn = h("select", { "aria-label": "Their role" }, ROLES.map(function (r) { return h("option", { value: r, text: r[0].toUpperCase() + r.slice(1), selected: r === "attendee" }); }));
+    var addForm = h("form", { class: "adder" }, h("div", { class: "field" }, h("label", { for: "who-names", text: "Add people" }), namesIn), h("div", { class: "field" }, h("label", { class: "label", text: "As" }), roleIn), h("button", { class: "btn", type: "submit", text: "Add" }));
+    var connectBtn = h("button", { class: "btn ghost", type: "button", text: "Connect everyone here with each other", onclick: function () {
       connectBtn.disabled = true;
       sb.rpc("ce_connect_event", { p_event: e.id }).then(function (r) {
         connectBtn.disabled = false;
         if (r.error) return fail(r.error, "Couldn’t connect them");
-        say(r.data ? r.data + " new connection" + (r.data === 1 ? "" : "s") + " (“met”) made." : "Everyone here is already connected.", "ok");
+        say(r.data ? r.data + " new connection" + (r.data === 1 ? "" : "s") + " made." : "Everyone here is already connected.", "ok");
       });
     } });
-    panel.push(adder, h("div", { class: "actions", style: "margin-top:16px" }, connectBtn));
+    addForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var names = namesIn.value.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+      if (!names.length) return say("Type at least one name.", "error");
+      var created = 0;
+      Promise.all(names.map(function (n) {
+        var p = findPerson(n);
+        if (p) return p;
+        created++;
+        return sb.from("ce_people").insert(splitName(n)).select().single().then(function (r) { if (r.error) throw r.error; return r.data; });
+      })).then(function (ps) {
+        return sb.from("ce_event_people").upsert(ps.map(function (p) { return { event_id: e.id, person_id: p.id, role: roleIn.value }; })).then(function (r) {
+          if (r.error) throw r.error;
+          namesIn.value = "";
+          say(ps.length + " added" + (created ? " (" + created + " new to People)" : "") + ".", "ok");
+          return loadPeople().then(draw);
+        });
+      }).catch(function (err) { fail(err, "Couldn’t add"); });
+    });
     function draw() {
       sb.from("ce_event_people").select("person_id, role").eq("event_id", e.id).then(function (r) {
-        if (r.error) return fail(r.error, "Couldn’t load who was there");
+        if (r.error) return fail(r.error);
         var rows = r.data.sort(function (a, b) { return ROLES.indexOf(a.role) - ROLES.indexOf(b.role) || fullName(personById[a.person_id]).localeCompare(fullName(personById[b.person_id])); });
-        who.replaceChildren.apply(who, rows.length ? rows.map(function (x) {
+        fill(listEl, rows.length ? rows.map(function (x) {
           var p = personById[x.person_id];
-          return h("li", null,
-            h("span", { class: "main" }, h("a", { href: "#people/" + x.person_id, text: fullName(p) }), p && p.headline ? h("span", { class: "s", text: p.headline }) : null),
-            h("span", { class: "side" }, h("span", { class: "s", text: x.role }),
-              h("button", { class: "link danger", type: "button", text: "Remove", onclick: function () {
-                sb.from("ce_event_people").delete().eq("event_id", e.id).eq("person_id", x.person_id).then(function (d) { if (d.error) return fail(d.error); say("Removed.", "ok"); draw(); });
-              } })));
-        }) : [h("li", { class: "empty", text: "No one added yet." })]);
+          var sel = h("select", { class: "mini", "aria-label": "Role of " + fullName(p) }, ROLES.map(function (ro) { return h("option", { value: ro, text: ro, selected: ro === x.role }); }));
+          sel.addEventListener("change", function () { sb.from("ce_event_people").update({ role: sel.value }).eq("event_id", e.id).eq("person_id", x.person_id).then(function (u) { if (u.error) fail(u.error); else say("Updated.", "ok"); }); });
+          return h("li", { class: "pchip" }, avatar(p, "sm"), h("a", { href: "#people/" + x.person_id, text: fullName(p) }), sel,
+            h("button", { class: "x", type: "button", "aria-label": "Remove " + fullName(p), text: "×", onclick: function () {
+              sb.from("ce_event_people").delete().eq("event_id", e.id).eq("person_id", x.person_id).then(function (d) { if (d.error) return fail(d.error); draw(); });
+            } }));
+        }) : h("li", { class: "empty", text: "No one added yet." }));
         connectBtn.hidden = rows.length < 2;
       });
     }
     draw();
-    return panel;
+    add(box, [h("h3", { text: "Who was there" }), h("p", { class: "hint", text: "Only admins see this. New names are added to People automatically." }), listEl, addForm, h("div", { style: "margin-top:12px" }, connectBtn)]);
+    return box;
   }
 
-  // People ----------------------------------------------------------------------
-
-  var PERSON_FIELDS = [
-    { name: "first_name", label: "First name", required: true, max: 100 },
-    { name: "last_name", label: "Last name", max: 100 },
-    { name: "email", label: "Email", type: "email" },
-    { name: "phone", label: "Phone", type: "tel", max: 40, inputmode: "tel" },
-    { name: "headline", label: "What they do", max: 200, wide: true, placeholder: "Founder, Studio Nine · Designer" },
-    { name: "disciplines", label: "Disciplines", type: "list", placeholder: "Design, film, music", help: "Separate with commas." },
-    { name: "tags", label: "Tags", type: "list", placeholder: "Founder, speaker, 2026 cohort", help: "Separate with commas." },
-    { name: "city", label: "City", max: 100 },
-    { name: "pronouns", label: "Pronouns", max: 40 },
-    { name: "bio", label: "Bio", type: "textarea", max: 4000, wide: true },
-    { name: "links", label: "Links", type: "lines", placeholder: "https://…  (one per line)", wide: true },
-    { name: "notes", label: "Private notes", type: "textarea", max: 8000, wide: true, help: "Only admins see these." },
-  ];
+  // People ----------------------------------------------------------------------------
 
   function peopleTab(id) {
     var listEl = h("ul", { class: "list" });
-    var countEl = h("p", { class: "count" });
     function drawList() {
       var shown = people.filter(function (p) { return matches(filters.peopleQ, [fullName(p), p.email || "", p.headline || "", p.city || "", (p.disciplines || []).join(" "), (p.tags || []).join(" ")]); });
-      listEl.replaceChildren.apply(listEl, shown.length ? shown.map(function (p) {
-        return h("li", null, h("a", { class: "row", href: "#people/" + p.id, "aria-current": p.id === id ? "true" : null },
-          h("span", { class: "t", text: fullName(p) }),
-          h("span", { class: "s", text: [p.headline, p.city].filter(Boolean).join(" · ") || (p.disciplines || []).join(", ") || p.email || " " })));
-      }) : [h("li", { class: "empty", text: people.length ? "No one matches." : "No one yet. Add the first person." })]);
-      countEl.textContent = shown.length + " of " + people.length + " people";
+      fill(listEl, shown.length ? shown.map(function (p) {
+        return h("li", null, h("a", { class: "row person-row", href: "#people/" + p.id, "aria-current": p.id === id ? "true" : null }, avatar(p),
+          h("span", { class: "main" }, h("span", { class: "t", text: fullName(p) }), h("span", { class: "s", text: [p.headline, p.city].filter(Boolean).join(" · ") || p.email || " " }))));
+      }) : h("li", { class: "empty", text: people.length ? "No one matches." : "No one yet." }));
     }
     drawList();
-    var left = [h("div", { class: "toolbar" }, searchBox("peopleQ", "Search name, email, discipline, tag", drawList), h("a", { class: "btn", href: "#people/new", text: "New person", role: "button" })), listEl, countEl];
+    var left = [h("div", { class: "toolbar" }, h("a", { class: "btn", href: "#people/new", text: "+ Add people" }), searchBox("peopleQ", "Search", drawList)), listEl, h("p", { class: "count", text: people.length + " people" })];
     var right;
-    if (id === "new") right = [h("h2", { text: "New person" }), editor({ table: "ce_people", tab: "people", fields: PERSON_FIELDS, createText: "Add person", after: loadPeople })];
-    else if (id && personById[id]) right = personPanel(personById[id]);
-    else if (id) right = [h("p", { class: "blank", text: "That person doesn’t exist any more." })];
-    else right = [h("p", { class: "blank", text: "Choose someone, or add a new person. Their details, notes, events and connections are only visible to admins." })];
+    if (id === "new") right = newPeople();
+    else if (id && personById[id]) right = personEditor(personById[id]);
+    else if (id) right = h("p", { class: "blank", text: "That person doesn’t exist any more." });
+    else right = h("p", { class: "blank", text: "Pick someone to see their details, events and connections." });
     return split(left, right);
   }
 
-  function personPanel(p) {
-    var evList = h("ul", { class: "items" }), connList = h("ul", { class: "items" }), sugList = h("ul", { class: "items" });
-    var panel = [
-      h("h2", { text: fullName(p) }),
-      p.headline ? h("p", { class: "hint", text: p.headline }) : null,
-      editor({ table: "ce_people", tab: "people", row: p, fields: PERSON_FIELDS, after: loadPeople, confirmDelete: function () { return "Delete " + fullName(p) + "? Their event history and connections are deleted too."; } }),
-      h("h3", { text: "Events" }), evList,
-    ];
-    // Add to an event.
-    var evIn = h("input", { type: "text", list: "dl-events", placeholder: "Type an event", "aria-label": "Event" });
-    var roleIn = h("select", { "aria-label": "Role" }, ROLES.map(function (r) { return h("option", { value: r, text: r[0].toUpperCase() + r.slice(1), selected: r === "attendee" }); }));
-    var evForm = h("form", { class: "adder" }, h("div", { class: "field" }, h("label", { class: "label", text: "Event" }), evIn), h("div", { class: "field" }, h("label", { class: "label", text: "Role" }), roleIn), h("button", { class: "btn", type: "submit", text: "Add" }));
-    evForm.addEventListener("submit", function (ev) {
+  // Add one person, or paste a list.
+  function newPeople() {
+    var one = personEditor(null);
+    var paste = area("bulk", "", { rows: 6, placeholder: "One person per line. Add an email after a comma if you have it:\nMaya Chen, maya@example.com\nJordan Ellis" });
+    var bulkBtn = h("button", { class: "btn", type: "submit", text: "Add everyone" });
+    var bulk = h("form", { class: "bulk" }, h("label", { for: "bulk", text: "Paste a list of names" }), paste, h("div", { class: "actions" }, bulkBtn));
+    bulk.addEventListener("submit", function (ev) {
       ev.preventDefault();
-      var e = findEvent(evIn.value);
-      if (!e) return say("Pick an event from the list, or add it under Events first.", "error");
-      sb.from("ce_event_people").upsert({ event_id: e.id, person_id: p.id, role: roleIn.value }).then(function (r) {
+      var rows = lines(paste.value).map(function (l) {
+        var parts = l.split(/\s*[,\t]\s*/), email = parts.find(function (x) { return /@/.test(x); });
+        var name = parts.filter(function (x) { return x !== email; }).join(" ");
+        return name ? Object.assign(splitName(name), email ? { email: email.toLowerCase() } : {}) : null;
+      }).filter(Boolean);
+      var fresh = rows.filter(function (r) { return !findPerson(fullName(r)) && !(r.email && people.some(function (p) { return (p.email || "").toLowerCase() === r.email; })); });
+      if (!rows.length) return say("Paste at least one name.", "error");
+      if (!fresh.length) return say("They’re all in People already.", "ok");
+      bulkBtn.disabled = true;
+      sb.from("ce_people").insert(fresh).then(function (r) {
+        bulkBtn.disabled = false;
         if (r.error) return fail(r.error, "Couldn’t add");
-        evIn.value = ""; say("Added to " + e.title + ".", "ok"); drawEvents(); drawSuggestions();
+        say(fresh.length + " added" + (rows.length > fresh.length ? " (" + (rows.length - fresh.length) + " were already there)" : "") + ".", "ok");
+        paste.value = "";
+        loadPeople().then(function () { location.hash = "#people"; render(); });
       });
     });
-    panel.push(evForm);
+    return [h("h2", { text: "Add people" }), h("div", { class: "tabs-mini" }, h("p", { class: "hint", text: "Add one person with their details, or paste a list of names to add many at once." })), one.slice(1), h("h3", { text: "Or add many at once" }), bulk];
+  }
 
-    // Connections.
-    panel.push(h("h3", { text: "Connections" }), connList);
-    var otherIn = h("input", { type: "text", list: "dl-people", placeholder: "Type a name", "aria-label": "Connect with" });
-    var kindIn = h("select", { "aria-label": "How" }, KINDS.map(function (k) { return h("option", { value: k, text: k[0].toUpperCase() + k.slice(1) }); }));
-    var noteIn = h("input", { type: "text", placeholder: "Note (optional)", "aria-label": "Note", maxlength: 2000 });
-    var connForm = h("form", { class: "adder four" }, h("div", { class: "field" }, h("label", { class: "label", text: "Connect with" }), otherIn), h("div", { class: "field" }, h("label", { class: "label", text: "How" }), kindIn), h("div", { class: "field" }, h("label", { class: "label", text: "Note" }), noteIn), h("button", { class: "btn", type: "submit", text: "Connect" }));
-    connForm.addEventListener("submit", function (ev) {
+  function personEditor(p) {
+    var isNew = !p;
+    var state = { photo_url: p ? p.photo_url : null };
+    var name = txt("p-name", p ? fullName(p) : "", { required: true, maxlength: 200, placeholder: "First and last name", autocomplete: "off" });
+    var headline = txt("p-headline", p && p.headline, { maxlength: 200, placeholder: "e.g. Founder of Studio Nine, designer" });
+    var city = txt("p-city", p && p.city, { maxlength: 100 });
+    var email = h("input", { id: "p-email", type: "email", value: (p && p.email) || "", autocomplete: "off" });
+    var phone = h("input", { id: "p-phone", type: "tel", value: (p && p.phone) || "", maxlength: 40 });
+    var links = area("p-links", p && (p.links || []).join("\n"), { rows: 2, placeholder: "Website or Instagram, one per line" });
+    var bio = area("p-bio", p && p.bio, { rows: 4, maxlength: 4000, placeholder: "A few sentences about them and their work." });
+    var notes = area("p-notes", p && p.notes, { rows: 3, maxlength: 8000, placeholder: "How you know them, what they’re looking for, who they should meet…" });
+    var disciplines = txt("p-disc", p && (p.disciplines || []).join(", "), { placeholder: "Design, film, music" });
+    var tags = txt("p-tags", p && (p.tags || []).join(", "), { placeholder: "Founder, speaker" });
+    var pronouns = txt("p-pronouns", p && p.pronouns, { maxlength: 40 });
+
+    var photoBox = h("div", { class: "photo-row" });
+    var drop = dropzone("Add photo", false, function (files) {
+      uploadMany(files, "people", function (u) { if (u[0]) { state.photo_url = u[0]; drawPhoto(); say("Photo added. Remember to save.", "ok"); } });
+    });
+    function drawPhoto() {
+      fill(photoBox, [avatar({ photo_url: state.photo_url, first_name: name.value || "?", last_name: "" }, "lg"),
+        h("div", null, drop, state.photo_url ? h("button", { class: "link", type: "button", text: "Remove photo", onclick: function () { state.photo_url = null; drawPhoto(); } }) : null)]);
+      drop.querySelector(".drop span:last-child").textContent = state.photo_url ? "Change photo" : "Add photo";
+    }
+
+    var saveBtn = h("button", { class: "btn", type: "submit", text: isNew ? "Add person" : "Save changes" });
+    var form = h("form", { class: "fields", novalidate: true },
+      h("div", { class: "field wide" }, photoBox),
+      fieldWrap("Name", name), fieldWrap("What they do", headline),
+      fieldWrap("Email", email), fieldWrap("Phone", phone),
+      fieldWrap("City", city), fieldWrap("Links", links),
+      fieldWrap("About them", bio, { wide: true }),
+      fieldWrap("Private notes", notes, { wide: true, help: "Only admins ever see these." }),
+      h("details", { class: "more wide" }, h("summary", { text: "Interests and more (helps suggest connections)" }),
+        h("div", { class: "fields inner" }, fieldWrap("Disciplines", disciplines, { help: "Separate with commas." }), fieldWrap("Tags", tags, { help: "Separate with commas." }), fieldWrap("Pronouns", pronouns))),
+      h("div", { class: "actions sticky" }, saveBtn));
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      if (!name.value.trim()) { name.focus(); return say("Add their name.", "error"); }
+      if (email.value && !email.checkValidity()) { email.focus(); return say("That email doesn’t look right.", "error"); }
+      var badLink = lines(links.value).find(function (l) { return !/^https?:\/\//i.test(l) && !/^@/.test(l); });
+      if (badLink) { links.focus(); return say("Links need to start with https:// (or use @handle for Instagram).", "error"); }
+      var data = Object.assign(splitName(name.value), {
+        headline: clean(headline.value), city: clean(city.value), email: clean(email.value) && email.value.trim().toLowerCase(), phone: clean(phone.value),
+        links: lines(links.value).map(function (l) { return /^@/.test(l) ? "https://instagram.com/" + l.slice(1) : l; }),
+        bio: clean(bio.value), notes: clean(notes.value), disciplines: list(disciplines.value), tags: list(tags.value), pronouns: clean(pronouns.value), photo_url: state.photo_url,
+      });
+      saveBtn.disabled = true;
+      var q = p ? sb.from("ce_people").update(data).eq("id", p.id).select().single() : sb.from("ce_people").insert(data).select().single();
+      q.then(function (r) {
+        saveBtn.disabled = false;
+        if (r.error) return fail(r.error, "Couldn’t save");
+        say(p ? "Saved." : fullName(r.data) + " added.", "ok");
+        loadPeople().then(function () { if (isNew) location.hash = "#people/" + r.data.id; else render(); });
+      });
+    });
+    drawPhoto();
+    var out = [h("h2", { text: p ? fullName(p) : "New person" }), form];
+    if (p) {
+      out.push(personEvents(p), personConnections(p));
+      out.push(h("div", { class: "danger-zone" }, h("button", { class: "link danger", type: "button", text: "Delete " + fullName(p), onclick: function () {
+        if (!confirm("Delete " + fullName(p) + "? Their events list and connections go too. This can’t be undone.")) return;
+        sb.from("ce_people").delete().eq("id", p.id).then(function (r) { if (r.error) return fail(r.error, "Couldn’t delete"); say("Deleted.", "ok"); loadPeople().then(function () { location.hash = "#people"; }); });
+      } })));
+    }
+    return out;
+  }
+
+  function personEvents(p) {
+    var listEl = h("ul", { class: "items" });
+    var evIn = h("input", { id: "pe-event", type: "text", list: "dl-events", placeholder: "Type an event name" });
+    var roleIn = h("select", { "aria-label": "Role" }, ROLES.map(function (r) { return h("option", { value: r, text: r[0].toUpperCase() + r.slice(1), selected: r === "attendee" }); }));
+    var form = h("form", { class: "adder" }, h("div", { class: "field" }, h("label", { for: "pe-event", text: "Add to an event" }), evIn), h("div", { class: "field" }, h("label", { class: "label", text: "As" }), roleIn), h("button", { class: "btn", type: "submit", text: "Add" }));
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var e = findEvent(evIn.value);
+      if (!e) return say("Pick an event from the list.", "error");
+      sb.from("ce_event_people").upsert({ event_id: e.id, person_id: p.id, role: roleIn.value }).then(function (r) { if (r.error) return fail(r.error); evIn.value = ""; say("Added to " + e.title + ".", "ok"); draw(); });
+    });
+    function draw() {
+      sb.from("ce_event_people").select("event_id, role").eq("person_id", p.id).then(function (r) {
+        if (r.error) return fail(r.error);
+        var rows = r.data.filter(function (x) { return eventById[x.event_id]; }).sort(function (a, b) { return eventById[b.event_id].starts_at.localeCompare(eventById[a.event_id].starts_at); });
+        fill(listEl, rows.length ? rows.map(function (x) {
+          var e = eventById[x.event_id];
+          return h("li", null, h("span", { class: "main" }, h("a", { href: "#events/" + e.id, text: e.title }), h("span", { class: "s", text: fmtDate(e.starts_at) + " · " + x.role })),
+            h("button", { class: "link danger", type: "button", text: "Remove", onclick: function () { sb.from("ce_event_people").delete().eq("event_id", e.id).eq("person_id", p.id).then(function (d) { if (d.error) return fail(d.error); draw(); }); } }));
+        }) : h("li", { class: "empty", text: "Not at any events yet." }));
+      });
+    }
+    draw();
+    return h("section", null, h("h3", { text: "Events" }), listEl, form);
+  }
+
+  function personConnections(p) {
+    var listEl = h("ul", { class: "items" }), sugEl = h("ul", { class: "items" });
+    var otherIn = h("input", { id: "pc-other", type: "text", list: "dl-people", placeholder: "Type a name" });
+    var kindIn = h("select", { "aria-label": "How they’re connected" }, KINDS.map(function (k) { return h("option", { value: k, text: k[0].toUpperCase() + k.slice(1) }); }));
+    var form = h("form", { class: "adder" }, h("div", { class: "field" }, h("label", { for: "pc-other", text: "Connect with" }), otherIn), h("div", { class: "field" }, h("label", { class: "label", text: "How" }), kindIn), h("button", { class: "btn", type: "submit", text: "Connect" }));
+    form.addEventListener("submit", function (ev) {
       ev.preventDefault();
       var o = findPerson(otherIn.value);
       if (!o) return say("Pick someone from the list.", "error");
       if (o.id === p.id) return say("That’s the same person.", "error");
-      connect(p.id, o.id, kindIn.value, clean(noteIn.value)).then(function (ok) { if (ok) { otherIn.value = ""; noteIn.value = ""; drawConnections(); drawSuggestions(); } });
+      connect(p.id, o.id, kindIn.value).then(function (ok) { if (ok) { otherIn.value = ""; draw(); } });
     });
-    panel.push(connForm);
-
-    panel.push(h("h3", { text: "Suggested connections" }), h("p", { class: "hint", text: "People they’re not connected to yet who were at the same events or share disciplines and tags." }), sugList);
-
-    function drawEvents() {
-      sb.from("ce_event_people").select("event_id, role").eq("person_id", p.id).then(function (r) {
-        if (r.error) return fail(r.error);
-        var rows = r.data.filter(function (x) { return eventById[x.event_id]; }).sort(function (a, b) { return eventById[b.event_id].starts_at.localeCompare(eventById[a.event_id].starts_at); });
-        evList.replaceChildren.apply(evList, rows.length ? rows.map(function (x) {
-          var e = eventById[x.event_id];
-          return h("li", null, h("span", { class: "main" }, h("a", { href: "#events/" + e.id, text: e.title }), h("span", { class: "s", text: fmtDate(e.starts_at) + (isPast(e) ? "" : " · upcoming") })),
-            h("span", { class: "side" }, h("span", { class: "s", text: x.role }), h("button", { class: "link danger", type: "button", text: "Remove", onclick: function () {
-              sb.from("ce_event_people").delete().eq("event_id", e.id).eq("person_id", p.id).then(function (d) { if (d.error) return fail(d.error); drawEvents(); drawSuggestions(); });
-            } })));
-        }) : [h("li", { class: "empty", text: "No events yet." })]);
-      });
-    }
-    function drawConnections() {
+    function draw() {
       sb.from("ce_connections").select("*").or("person_a.eq." + p.id + ",person_b.eq." + p.id).order("created_at", { ascending: false }).then(function (r) {
         if (r.error) return fail(r.error);
-        connList.replaceChildren.apply(connList, r.data.length ? r.data.map(function (c) {
+        fill(listEl, r.data.length ? r.data.map(function (c) {
           var oid = c.person_a === p.id ? c.person_b : c.person_a, o = personById[oid], e = c.event_id && eventById[c.event_id];
-          return h("li", null, h("span", { class: "main" }, h("a", { href: "#people/" + oid, text: fullName(o) }), h("span", { class: "s", text: [c.kind, e ? "at " + e.title : null, c.note].filter(Boolean).join(" · ") })),
-            h("span", { class: "side" }, h("button", { class: "link danger", type: "button", text: "Remove", onclick: function () { removeConnection(c).then(function () { drawConnections(); drawSuggestions(); }); } })));
-        }) : [h("li", { class: "empty", text: "No connections yet." })]);
+          return h("li", null, h("span", { class: "main person-inline" }, avatar(o, "sm"), h("span", null, h("a", { href: "#people/" + oid, text: fullName(o) }), h("span", { class: "s", text: [c.kind, e ? "at " + e.title : null, c.note].filter(Boolean).join(" · ") }))),
+            h("button", { class: "link danger", type: "button", text: "Remove", onclick: function () { removeConnection(c).then(draw); } }));
+        }) : h("li", { class: "empty", text: "No connections yet." }));
       });
-    }
-    function drawSuggestions() {
-      sb.rpc("ce_connection_suggestions", { p_person: p.id, p_limit: 10 }).then(function (r) {
+      sb.rpc("ce_connection_suggestions", { p_person: p.id, p_limit: 8 }).then(function (r) {
         if (r.error) return fail(r.error);
-        sugList.replaceChildren.apply(sugList, r.data.length ? r.data.map(function (s) {
+        fill(sugEl, r.data.length ? r.data.map(function (s) {
           var why = [];
           if (s.shared_events) why.push(s.shared_events + " event" + (s.shared_events === 1 ? "" : "s") + " together");
           if (s.shared_interests && s.shared_interests.length) why.push("both " + s.shared_interests.join(", "));
-          return h("li", null, h("span", { class: "main" }, h("a", { href: "#people/" + s.person_id, text: fullName(s) }), h("span", { class: "s", text: why.join(" · ") })),
-            h("span", { class: "side" }, h("button", { class: "btn ghost small", type: "button", text: "Connect", onclick: function () {
-              connect(p.id, s.person_id, s.shared_events ? "met" : "introduced", null).then(function (ok) { if (ok) { drawConnections(); drawSuggestions(); } });
-            } })));
-        }) : [h("li", { class: "empty", text: "No suggestions yet. Add them to events, or give them disciplines and tags." })]);
+          return h("li", null, h("span", { class: "main person-inline" }, avatar(personById[s.person_id], "sm"), h("span", null, h("a", { href: "#people/" + s.person_id, text: fullName(s) }), h("span", { class: "s", text: why.join(" · ") }))),
+            h("button", { class: "btn ghost small", type: "button", text: "Connect", onclick: function () { connect(p.id, s.person_id, s.shared_events ? "met" : "introduced").then(function (ok) { if (ok) draw(); }); } }));
+        }) : h("li", { class: "empty", text: "No suggestions yet. They appear when people share events or interests." }));
       });
     }
-    drawEvents(); drawConnections(); drawSuggestions();
-    return panel;
+    draw();
+    return h("section", null, h("h3", { text: "Connections" }), listEl, form, h("h3", { text: "People they should meet" }), h("p", { class: "hint", text: "Not connected yet, but were at the same events or share interests." }), sugEl);
   }
 
   function connect(a, b, kind, note, eventId) {
-    return sb.from("ce_connections").insert({ person_a: a, person_b: b, kind: kind, note: note, event_id: eventId || null }).then(function (r) {
+    return sb.from("ce_connections").insert({ person_a: a, person_b: b, kind: kind, note: note || null, event_id: eventId || null }).then(function (r) {
       if (r.error) { fail(r.error, "Couldn’t connect"); return false; }
-      say(fullName(personById[a]) + " and " + fullName(personById[b]) + " are connected (" + kind + ").", "ok");
+      say(fullName(personById[a]) + " and " + fullName(personById[b]) + " are connected.", "ok");
       return true;
     });
   }
@@ -418,25 +608,16 @@
     return sb.from("ce_connections").delete().eq("id", c.id).then(function (r) { if (r.error) fail(r.error); else say("Connection removed.", "ok"); });
   }
 
-  // Connections -------------------------------------------------------------------
+  // Connections overview --------------------------------------------------------------------
 
   function connectionsTab() {
-    var wrap = h("div");
-    var stats = h("div", { class: "stats" });
-    var listEl = h("ul", { class: "items" });
-    var all = [];
-    var aIn = h("input", { type: "text", list: "dl-people", placeholder: "Type a name", "aria-label": "Person" });
-    var bIn = h("input", { type: "text", list: "dl-people", placeholder: "Type a name", "aria-label": "Other person" });
-    var kindIn = h("select", { "aria-label": "How" }, KINDS.map(function (k) { return h("option", { value: k, text: k[0].toUpperCase() + k.slice(1) }); }));
-    var evIn = h("input", { type: "text", list: "dl-events", placeholder: "Event (optional)", "aria-label": "Event" });
-    var noteIn = h("input", { type: "text", placeholder: "Note (optional)", "aria-label": "Note", maxlength: 2000 });
-    var form = h("form", { class: "fields" },
-      h("div", { class: "field" }, h("label", { class: "label", text: "Person" }), aIn),
-      h("div", { class: "field" }, h("label", { class: "label", text: "Connect with" }), bIn),
-      h("div", { class: "field" }, h("label", { class: "label", text: "How" }), kindIn),
-      h("div", { class: "field" }, h("label", { class: "label", text: "Where (event)" }), evIn),
-      h("div", { class: "field wide" }, h("label", { class: "label", text: "Note" }), noteIn),
-      h("div", { class: "actions" }, h("button", { class: "btn", type: "submit", text: "Connect" })));
+    var stats = h("div", { class: "stats" }), listEl = h("ul", { class: "items" }), all = [];
+    var aIn = h("input", { id: "c-a", type: "text", list: "dl-people", placeholder: "Type a name" });
+    var bIn = h("input", { id: "c-b", type: "text", list: "dl-people", placeholder: "Type a name" });
+    var kindIn = h("select", { id: "c-kind" }, KINDS.map(function (k) { return h("option", { value: k, text: k[0].toUpperCase() + k.slice(1) }); }));
+    var evIn = h("input", { id: "c-ev", type: "text", list: "dl-events", placeholder: "Optional" });
+    var noteIn = h("input", { id: "c-note", type: "text", placeholder: "Optional", maxlength: 2000 });
+    var form = h("form", { class: "fields" }, fieldWrap("Person", aIn), fieldWrap("Connect with", bIn), fieldWrap("How", kindIn), fieldWrap("At an event", evIn), fieldWrap("Note", noteIn, { wide: true }), h("div", { class: "actions" }, h("button", { class: "btn", type: "submit", text: "Connect" })));
     form.addEventListener("submit", function (ev) {
       ev.preventDefault();
       var a = findPerson(aIn.value), b = findPerson(bIn.value), e = evIn.value.trim() ? findEvent(evIn.value) : null;
@@ -445,74 +626,84 @@
       if (evIn.value.trim() && !e) return say("Pick the event from the list, or leave it empty.", "error");
       connect(a.id, b.id, kindIn.value, clean(noteIn.value), e && e.id).then(function (ok) { if (ok) { aIn.value = bIn.value = evIn.value = noteIn.value = ""; load(); } });
     });
-    var search = searchBox("connQ", "Search connections", draw);
     function draw() {
       var shown = all.filter(function (c) { var e = c.event_id && eventById[c.event_id]; return matches(filters.connQ, [fullName(personById[c.person_a]), fullName(personById[c.person_b]), c.kind, c.note || "", e ? e.title : ""]); });
-      listEl.replaceChildren.apply(listEl, shown.length ? shown.slice(0, 500).map(function (c) {
+      fill(listEl, shown.length ? shown.slice(0, 500).map(function (c) {
         var e = c.event_id && eventById[c.event_id];
-        return h("li", null, h("span", { class: "main" },
-          h("a", { href: "#people/" + c.person_a, text: fullName(personById[c.person_a]) }), " — ", h("a", { href: "#people/" + c.person_b, text: fullName(personById[c.person_b]) }),
-          h("span", { class: "s", text: [c.kind, e ? "at " + e.title : null, c.note, fmtDate(c.created_at)].filter(Boolean).join(" · ") })),
-          h("span", { class: "side" }, h("button", { class: "link danger", type: "button", text: "Remove", onclick: function () { removeConnection(c).then(load); } })));
-      }) : [h("li", { class: "empty", text: all.length ? "No connections match." : "No connections yet. Connect people here, from someone’s page, or from an event (“Connect everyone who was there”)." })]);
+        return h("li", null, h("span", { class: "main" }, h("a", { href: "#people/" + c.person_a, text: fullName(personById[c.person_a]) }), " & ", h("a", { href: "#people/" + c.person_b, text: fullName(personById[c.person_b]) }),
+          h("span", { class: "s", text: [c.kind, e ? "at " + e.title : null, c.note].filter(Boolean).join(" · ") })),
+          h("button", { class: "link danger", type: "button", text: "Remove", onclick: function () { removeConnection(c).then(load); } }));
+      }) : h("li", { class: "empty", text: all.length ? "No connections match." : "No connections yet. Connect people here, from a person’s page, or from an event." }));
     }
+    function stat(n, l) { return h("div", { class: "stat" }, h("div", { class: "n", text: String(n) }), h("div", { class: "l", text: l })); }
     function load() {
       sb.from("ce_connections").select("*").order("created_at", { ascending: false }).limit(5000).then(function (r) {
         if (r.error) return fail(r.error, "Couldn’t load connections");
         all = r.data;
         var degree = {};
         all.forEach(function (c) { degree[c.person_a] = (degree[c.person_a] || 0) + 1; degree[c.person_b] = (degree[c.person_b] || 0) + 1; });
-        var connectedPeople = Object.keys(degree).length;
-        var top = Object.keys(degree).sort(function (x, y) { return degree[y] - degree[x]; })[0];
-        stats.replaceChildren(
-          stat(all.length, "connections"),
-          stat(people.length ? Math.round((connectedPeople / people.length) * 100) + "%" : "–", "of people connected"),
-          stat(people.length - connectedPeople, "not connected yet"),
-          top ? h("div", { class: "stat" }, h("div", { class: "n" }, h("a", { href: "#people/" + top, text: fullName(personById[top]), style: "text-decoration:none" })), h("div", { class: "l", text: "most connected (" + degree[top] + ")" })) : null);
+        var connected = Object.keys(degree).length, top = Object.keys(degree).sort(function (x, y) { return degree[y] - degree[x]; })[0];
+        fill(stats, [stat(all.length, "connections"), stat(people.length - connected, "people not connected yet"),
+          top ? h("div", { class: "stat" }, h("div", { class: "n" }, h("a", { href: "#people/" + top, class: "plain", text: fullName(personById[top]) })), h("div", { class: "l", text: "most connected (" + degree[top] + ")" })) : null]);
         draw();
       });
     }
-    function stat(n, l) { return h("div", { class: "stat" }, h("div", { class: "n", text: String(n) }), h("div", { class: "l", text: l })); }
     load();
-    add(wrap, [stats, h("div", { class: "split" },
+    return h("div", null, stats, h("div", { class: "split" },
       h("section", { class: "panel" }, h("h2", { text: "Connect two people" }), form),
-      h("section", { class: "panel" }, h("h2", { text: "All connections" }), h("div", { class: "toolbar", style: "margin-top:16px" }, search), listEl))]);
-    return wrap;
+      h("section", { class: "panel" }, h("h2", { text: "All connections" }), h("div", { class: "toolbar", style: "margin-top:16px" }, searchBox("connQ", "Search", draw)), listEl)));
   }
 
-  // Partners ---------------------------------------------------------------------
+  // Partners ---------------------------------------------------------------------------------
 
-  var PARTNER_FIELDS = [
-    { name: "name", label: "Name", required: true, max: 200, wide: true },
-    { name: "description", label: "Description", type: "textarea", max: 2000, wide: true },
-    { name: "url", label: "Website", type: "url", placeholder: "https://" },
-    { name: "logo_url", label: "Logo link", type: "url", placeholder: "https://" },
-    { name: "sort", label: "Order", type: "number", help: "Lower numbers come first." },
-    { name: "published", label: "Show publicly", type: "checkbox" },
-  ];
   function partnersTab(id) {
-    var listEl = h("ul", { class: "list" });
-    var right = h("div");
+    var listEl = h("ul", { class: "list" }), right = h("div");
     sb.from("ce_partners").select("*").order("sort").order("name").then(function (r) {
       if (r.error) return fail(r.error, "Couldn’t load partners");
       var rows = r.data, current = rows.find(function (x) { return x.id === id; });
-      listEl.replaceChildren.apply(listEl, rows.length ? rows.map(function (x) {
-        return h("li", null, h("a", { class: "row", href: "#partners/" + x.id, "aria-current": x.id === id ? "true" : null },
-          h("span", { class: "t" }, x.name, x.published ? null : h("span", { class: "badge", text: "Hidden" })), h("span", { class: "s", text: x.url || " " })));
-      }) : [h("li", { class: "empty", text: "No partners yet." })]);
-      if (id === "new") add(right, [h("h2", { text: "New partner" }), editor({ table: "ce_partners", tab: "partners", fields: PARTNER_FIELDS, createText: "Add partner" })]);
-      else if (current) add(right, [h("h2", { text: current.name }), editor({ table: "ce_partners", tab: "partners", row: current, fields: PARTNER_FIELDS, confirmDelete: function () { return "Delete " + current.name + "?"; } })]);
-      else add(right, h("p", { class: "blank", text: id ? "That partner doesn’t exist any more." : "Choose a partner, or add one. Partners are saved here now; the Partners page will list the ones marked “Show publicly” once it’s connected." }));
+      fill(listEl, rows.length ? rows.map(function (x) {
+        return h("li", null, h("a", { class: "row person-row", href: "#partners/" + x.id, "aria-current": x.id === id ? "true" : null }, x.logo_url ? h("img", { class: "avatar logo", src: x.logo_url, alt: "" }) : h("span", { class: "avatar logo", text: x.name[0] }),
+          h("span", { class: "main" }, h("span", { class: "t" }, x.name, x.published ? null : h("span", { class: "badge", text: "Hidden" })), h("span", { class: "s", text: x.url || " " }))));
+      }) : h("li", { class: "empty", text: "No partners yet." }));
+      if (id === "new" || current) add(right, partnerEditor(current || null));
+      else add(right, h("p", { class: "blank", text: id ? "That partner doesn’t exist any more." : "Pick a partner, or add one." }));
     });
-    return split([h("div", { class: "toolbar" }, h("a", { class: "btn", href: "#partners/new", text: "New partner", role: "button" })), listEl], right);
+    return split([h("div", { class: "toolbar" }, h("a", { class: "btn", href: "#partners/new", text: "+ New partner" })), listEl], right);
+  }
+  function partnerEditor(x) {
+    var state = { logo_url: x ? x.logo_url : null };
+    var name = txt("pa-name", x && x.name, { required: true, maxlength: 200 });
+    var url = h("input", { id: "pa-url", type: "url", value: (x && x.url) || "", placeholder: "https://…" });
+    var desc = area("pa-desc", x && x.description, { rows: 3, maxlength: 2000 });
+    var sort = h("input", { id: "pa-sort", type: "number", value: x ? x.sort : 0 });
+    var shown = h("input", { id: "pa-pub", type: "checkbox", checked: x ? x.published : true });
+    var logoRow = h("div", { class: "photo-row" });
+    var drop = dropzone("Add logo", false, function (f) { uploadMany(f, "partners", function (u) { if (u[0]) { state.logo_url = u[0]; drawLogo(); } }); });
+    function drawLogo() { fill(logoRow, [state.logo_url ? h("img", { class: "avatar lg logo", src: state.logo_url, alt: "" }) : h("span", { class: "avatar lg logo", text: "Logo" }), drop]); }
+    drawLogo();
+    var form = h("form", { class: "fields", novalidate: true }, h("div", { class: "field wide" }, logoRow), fieldWrap("Name", name), fieldWrap("Website", url), fieldWrap("About them", desc, { wide: true }),
+      fieldWrap("Order", sort, { help: "Lower numbers come first." }), h("div", { class: "field" }, h("span", { class: "label", text: " " }), h("label", { class: "check" }, shown, "Show publicly")),
+      h("div", { class: "actions" }, h("button", { class: "btn", type: "submit", text: x ? "Save changes" : "Add partner" }), h("span", { class: "spacer" }),
+        x ? h("button", { class: "link danger", type: "button", text: "Delete", onclick: function () { if (!confirm("Delete " + x.name + "?")) return; sb.from("ce_partners").delete().eq("id", x.id).then(function (r) { if (r.error) return fail(r.error); say("Deleted.", "ok"); location.hash = "#partners"; }); } }) : null));
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      if (!name.value.trim()) return say("Add a name.", "error");
+      if (url.value && !/^https?:\/\//i.test(url.value)) return say("The website needs to start with https://", "error");
+      var data = { name: name.value.trim(), url: clean(url.value), description: clean(desc.value), sort: Number(sort.value) || 0, published: shown.checked, logo_url: state.logo_url };
+      (x ? sb.from("ce_partners").update(data).eq("id", x.id).select().single() : sb.from("ce_partners").insert(data).select().single()).then(function (r) {
+        if (r.error) return fail(r.error, "Couldn’t save");
+        say("Saved.", "ok"); if (x) render(); else location.hash = "#partners/" + r.data.id;
+      });
+    });
+    return [h("h2", { text: x ? x.name : "New partner" }), form];
   }
 
-  // Site text --------------------------------------------------------------------
+  // Website words -------------------------------------------------------------------------------
 
   function contentTab() {
-    var wrap = h("section", { class: "panel" }, h("h2", { text: "Site text" }), h("p", { class: "hint", text: "Change the words on the public pages. Leave a box empty to use the words built into the page." }));
+    var wrap = h("section", { class: "panel narrow" }, h("h2", { text: "Website words" }), h("p", { class: "hint", text: "Change what the website says. Saving puts it live straight away. Empty a box to go back to the original words." }));
     sb.from("ce_site_content").select("*").then(function (r) {
-      if (r.error) return fail(r.error, "Couldn’t load site text");
+      if (r.error) return fail(r.error, "Couldn’t load");
       var saved = {};
       r.data.forEach(function (x) { saved[x.key] = x; });
       var items = CONTENT.slice();
@@ -520,41 +711,31 @@
       items.forEach(function (it) {
         var id = "c-" + it.key.replace(/[^a-z0-9]/g, "-");
         var cur = saved[it.key] ? saved[it.key].value : "";
-        var input = it.long ? h("textarea", { id: id, rows: it.key === "home.intro" ? 8 : 3, placeholder: it.hint, maxlength: 8000 }, cur) : h("input", { id: id, type: "text", value: cur, placeholder: it.hint, maxlength: 8000 });
-        var note = h("span", { class: "s", style: "color:var(--muted);font-size:13px", text: saved[it.key] ? "Changed " + fmtDate(saved[it.key].updated_at, true) : "Using the built-in words" });
+        var input = it.long ? h("textarea", { id: id, rows: it.rows || 3, placeholder: it.hint, maxlength: 8000 }, cur) : h("input", { id: id, type: "text", value: cur, placeholder: it.hint, maxlength: 8000 });
+        var note = h("span", { class: "s", text: saved[it.key] ? "Changed " + fmtDate(saved[it.key].updated_at) : "Using the original words" });
         var btn = h("button", { class: "btn small", type: "button", text: "Save", onclick: function () {
           var v = input.value.trim();
           btn.disabled = true;
-          var q = v ? sb.from("ce_site_content").upsert({ key: it.key, value: v }) : sb.from("ce_site_content").delete().eq("key", it.key);
-          q.then(function (res) {
+          (v ? sb.from("ce_site_content").upsert({ key: it.key, value: v }) : sb.from("ce_site_content").delete().eq("key", it.key)).then(function (res) {
             btn.disabled = false;
             if (res.error) return fail(res.error, "Couldn’t save");
-            note.textContent = v ? "Saved just now" : "Using the built-in words";
-            say(v ? "Saved. It’s live on the site." : "Back to the built-in words.", "ok");
+            note.textContent = v ? "Saved just now" : "Using the original words";
+            say(v ? "Saved. It’s live on the website." : "Back to the original words.", "ok");
           });
         } });
-        wrap.appendChild(h("div", { class: "content-item" }, h("label", { for: id }, h("span", { class: "name", text: it.name }), " ", h("span", { class: "k", text: it.key })), h("div", { style: "margin-top:8px" }, input), h("div", { class: "row2" }, btn, note)));
+        wrap.appendChild(h("div", { class: "content-item" }, h("label", { for: id, class: "name", text: it.name }), h("div", { style: "margin-top:8px" }, input), h("div", { class: "row2" }, btn, note)));
       });
-      // Add a new key (for pages wired up later).
-      var keyIn = h("input", { type: "text", placeholder: "new.key", "aria-label": "New key", pattern: "[a-z0-9_.\\-]{1,80}" });
-      var addForm = h("form", { class: "adder", style: "margin-top:32px" }, h("div", { class: "field" }, h("label", { class: "label", text: "Add another piece of text (for a page marked up with data-content)" }), keyIn), h("span"), h("button", { class: "btn ghost", type: "submit", text: "Add" }));
-      addForm.addEventListener("submit", function (ev) {
-        ev.preventDefault();
-        var k = keyIn.value.trim().toLowerCase();
-        if (!/^[a-z0-9_.-]{1,80}$/.test(k)) return say("Keys use lowercase letters, numbers, dots, dashes and underscores.", "error");
-        sb.from("ce_site_content").upsert({ key: k, value: "(new text)" }).then(function (res) { if (res.error) return fail(res.error); render(); });
-      });
-      wrap.appendChild(addForm);
+      wrap.appendChild(h("p", { class: "hint", style: "margin-top:24px" }, h("a", { href: "/", target: "_blank", rel: "noopener", text: "Open the website ↗" })));
     });
     return wrap;
   }
 
-  // Admins -----------------------------------------------------------------------
+  // Admins ----------------------------------------------------------------------------------------
 
   function adminsTab() {
     var listEl = h("ul", { class: "items" });
-    var emailIn = h("input", { type: "email", placeholder: "Their sign-in email", "aria-label": "Email", required: true });
-    var form = h("form", { class: "adder" }, h("div", { class: "field" }, h("label", { class: "label", text: "Make someone an admin" }), emailIn), h("span"), h("button", { class: "btn", type: "submit", text: "Add admin" }));
+    var emailIn = h("input", { id: "ad-email", type: "email", placeholder: "Their sign-in email", required: true });
+    var form = h("form", { class: "adder" }, h("div", { class: "field" }, h("label", { for: "ad-email", text: "Make someone an admin" }), emailIn), h("span"), h("button", { class: "btn", type: "submit", text: "Add admin" }));
     form.addEventListener("submit", function (ev) {
       ev.preventDefault();
       sb.rpc("ce_add_admin", { p_email: emailIn.value }).then(function (r) {
@@ -565,37 +746,37 @@
     function load() {
       sb.from("ce_admins").select("*").order("created_at").then(function (r) {
         if (r.error) return fail(r.error, "Couldn’t load admins");
-        listEl.replaceChildren.apply(listEl, r.data.map(function (a) {
+        fill(listEl, r.data.map(function (a) {
           var self = a.user_id === me.id;
-          return h("li", null, h("span", { class: "main" }, a.email || a.user_id, self ? h("span", { class: "s", text: "You" }) : h("span", { class: "s", text: "Since " + fmtDate(a.created_at) })),
-            self ? null : h("span", { class: "side" }, h("button", { class: "link danger", type: "button", text: "Remove", onclick: function () {
+          return h("li", null, h("span", { class: "main" }, a.email || a.user_id, h("span", { class: "s", text: self ? "You" : "Since " + fmtDate(a.created_at) })),
+            self ? null : h("button", { class: "link danger", type: "button", text: "Remove", onclick: function () {
               if (!confirm("Remove " + (a.email || "this admin") + " as an admin?")) return;
               sb.rpc("ce_remove_admin", { p_user: a.user_id }).then(function (d) { if (d.error) return fail(d.error); say("Removed.", "ok"); load(); });
-            } })));
+            } }));
         }));
       });
     }
     load();
-    return h("section", { class: "panel" }, h("h2", { text: "Admins" }), h("p", { class: "hint", text: "Admins can see and change everything here. They need an account on the site first (they sign up through Join or Sign in)." }), listEl, form);
+    return h("section", { class: "panel narrow" }, h("h2", { text: "Admins" }), h("p", { class: "hint", text: "Admins can change everything here. They need an account on the website first." }), listEl, form);
   }
 
-  // Routing ------------------------------------------------------------------------
+  // Routing -----------------------------------------------------------------------------------------
 
-  var TABS = { events: eventsTab, people: peopleTab, connections: connectionsTab, partners: partnersTab, content: contentTab, admins: adminsTab };
+  var TABS = { start: startTab, events: eventsTab, people: peopleTab, connections: connectionsTab, partners: partnersTab, content: contentTab, admins: adminsTab };
   var lastTab = null;
   function render() {
-    var parts = (location.hash.replace(/^#/, "") || "events").split("/");
-    var tab = TABS[parts[0]] ? parts[0] : "events";
+    var parts = (location.hash.replace(/^#/, "") || "start").split("/");
+    var tab = TABS[parts[0]] ? parts[0] : "start";
     if (tab !== lastTab) say("");
     lastTab = tab;
     document.querySelectorAll("nav.tabs a").forEach(function (a) { if (a.dataset.tab === tab) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
-    var view = $("view");
-    view.replaceChildren(TABS[tab](parts[1] ? decodeURIComponent(parts[1]) : null));
-    document.title = (document.querySelector('nav.tabs a[data-tab="' + tab + '"]').textContent) + " · Manage · Creative Endeavors";
+    fill($("view"), TABS[tab](parts[1] ? decodeURIComponent(parts[1]) : null));
+    var label = document.querySelector('nav.tabs a[data-tab="' + tab + '"]');
+    document.title = (label ? label.textContent + " · " : "") + "Manage · Creative Endeavors";
   }
   window.addEventListener("hashchange", function () { render(); window.scrollTo({ top: 0 }); });
 
-  // Signing in -----------------------------------------------------------------------
+  // Signing in -----------------------------------------------------------------------------------------
 
   function gate(title, text, showForm) {
     $("app").hidden = true; $("gate").hidden = false;
@@ -610,23 +791,20 @@
     if (!me) { started = false; return gate("Manage.", "Sign in with your Creative Endeavors account.", true); }
     if (started) return;
     started = true;
-    gate("Manage.", "Checking you’re an admin…", false);
+    gate("Manage.", "One moment…", false);
     sb.rpc("ce_is_admin").then(function (r) {
-      if (r.error) { started = false; return gate("Manage.", "The admin area couldn’t be reached. If this is a new setup, the database migration in supabase/migrations may not have been run yet.", false); }
-      if (!r.data) { started = false; return gate("Admins only.", "You’re signed in as " + (me.email || "someone") + ", which isn’t a Creative Endeavors admin account.", false); }
-      return Promise.all([loadPeople(), loadEvents()]).then(function () {
-        $("gate").hidden = true; $("app").hidden = false;
-        render();
-      });
-    }).catch(function (err) { started = false; fail(err); gate("Manage.", "Something went wrong loading the admin area. Please try again.", false); });
+      if (r.error) { started = false; return gate("Almost ready.", "The admin area isn’t set up in the database yet. Run supabase/migrations/20261119000000_manage.sql in Supabase (see the README).", false); }
+      if (!r.data) { started = false; return gate("Admins only.", "You’re signed in as " + (me.email || "someone") + ", which isn’t an admin account. Ask an admin to add you.", false); }
+      return Promise.all([loadPeople(), loadEvents()]).then(function () { $("gate").hidden = true; $("app").hidden = false; render(); });
+    }).catch(function (err) { started = false; fail(err); gate("Manage.", "Something went wrong. Please refresh the page.", false); });
   }
   $("sign-in").addEventListener("submit", function (ev) {
     ev.preventDefault();
     var st = $("si-status");
-    st.textContent = "Signing in…"; st.className = "status";
+    st.textContent = "Signing in…"; st.className = "status show";
     sb.auth.signInWithPassword({ email: $("si-email").value.trim(), password: $("si-password").value }).then(function (r) {
-      if (r.error) { st.textContent = r.error.message === "Invalid login credentials" ? "That email and password don’t match." : r.error.message; st.className = "status error"; return; }
-      st.textContent = "";
+      if (r.error) { st.textContent = r.error.message === "Invalid login credentials" ? "That email and password don’t match." : r.error.message; st.className = "status error show"; return; }
+      st.textContent = ""; st.className = "status";
     });
   });
   $("sign-out").addEventListener("click", function () { sb.auth.signOut(); });

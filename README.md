@@ -6,20 +6,21 @@ Data lives in the site's Supabase project.
 
 ## Manage (`/manage/`)
 
-The admin side of the site. Admins sign in with their site account and can:
+The admin side of the site. Admins sign in with their site account and land on a Start screen with the common jobs:
 
-- **Events**: add upcoming and past events, keep drafts, publish them to `/events/`, and record who was there and in what role (host, speaker, performer, artist, attendee, volunteer, partner).
-- **People**: everyone in the community: contact details, what they do, disciplines, tags, links, bio, and private notes only admins see. Each person shows their events, their connections, and suggested connections.
-- **Connections**: connect two people (met, collaborated, introduced, mentor, friends), optionally at an event. "Connect everyone who was there" on an event connects all its attendees at once. Suggestions rank people who were at the same events (strongest) or share disciplines and tags.
-- **Partners**: saved and ready for the Partners page.
-- **Site text**: change the words on the home and events pages without editing code.
-- **Admins**: add admins by the email they sign in with; remove them (never yourself).
+- **Add an upcoming event** or **write up a past event**: name, date, place, a cover photo, a one-line summary, the story (what happened, or what to expect), a photo gallery and an RSVP link. Save as a draft, or put it on the website with one button. Each published event gets its own page at `/events/event/?e=<name-and-date>` with the story and photos.
+- **Photos**: drag photos in or pick several at once; they're shrunk in the browser before upload, so phone photos are quick. Any photo can be made the cover.
+- **Who was there**: type names separated by commas; anyone new is added to People automatically. Change each person's role in place, and connect everyone at an event in one click.
+- **People**: add one person (with a photo), or paste a whole list of names and emails. Each person shows their events, their connections and the people they should meet (suggested from shared events and interests). Private notes are only ever seen by admins.
+- **Connections**, **Website words** (the homepage and events page text), **Partners** and **Admins**.
+
+The Start screen also lists past events that still need a write-up or photos.
 
 ## Setting up the back end (once)
 
 1. In the Supabase dashboard for this project, open **SQL Editor**, paste in
    [`supabase/migrations/20261119000000_manage.sql`](supabase/migrations/20261119000000_manage.sql) and run it.
-   It's safe to run again. It creates the `ce_` tables, the rules for who can see what, and the functions behind connections and admins.
+   It's safe to run again. It creates the `ce_` tables, the `ce-photos` storage bucket, the rules for who can see what, and the functions behind connections and admins.
 2. Make yourself the first admin. Sign up on the site if you haven't, then in the SQL Editor:
 
    ```sql

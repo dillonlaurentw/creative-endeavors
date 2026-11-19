@@ -154,20 +154,25 @@ footer .epigraph {
   main { padding-block: 64px; }
   .lede { font-size: 20px; }
 }
-/* Events: upcoming first (soonest at the top), then past (latest at the top). */
-main.events { align-self: start; }
-.section { margin: 48px 0 0; font-size: 13px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
-.list { list-style: none; margin: 0; padding: 0; }
-.event { padding: 20px 0; border-top: 1px solid #e6e6e6; }
+/* Events: upcoming first (soonest at the top), then past (latest at the top), each with its cover photo. */
+main.events { align-self: start; max-width: 44rem; }
+@media (min-width: 1024px) { main.events { max-width: 46rem; } }
+.section { margin: 56px 0 0; font-size: 13px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.list { list-style: none; margin: 8px 0 0; padding: 0; }
+.event { border-top: 1px solid #e6e6e6; }
 .event:first-child { border-top: 0; }
+.event a.card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 24px 0; color: var(--fg); }
+.event a.card:hover .title { color: var(--muted); }
+.event a.card:hover img { opacity: 0.92; }
+@media (min-width: 600px) { .event a.card.has-photo { grid-template-columns: 200px minmax(0, 1fr); gap: 24px; align-items: start; } }
+.event img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 4px; background: #f3f3f3; transition: opacity 0.15s; }
 .when { margin: 0; color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
-.title { margin: 4px 0 0; font-size: 18px; font-weight: 500; line-height: 1.35; }
-.where { margin: 2px 0 0; }
+.title { margin: 4px 0 0; font-size: 19px; font-weight: 500; line-height: 1.3; transition: color 0.15s; }
+.where { margin: 2px 0 0; color: var(--muted); }
 .about { margin: 8px 0 0; text-wrap: pretty; }
-.rsvp { display: inline-block; margin-top: 8px; text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
-.past .title, .past .where { color: var(--muted); }
+.more { display: inline-block; margin-top: 10px; font-size: 14px; text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
 .empty { margin: 16px 0 0; color: var(--muted); list-style: none; }
-@media (min-width: 1024px) { .title { font-size: 20px; } .section { font-size: 14px; } }
+@media (min-width: 1024px) { .title { font-size: 21px; } .section { font-size: 14px; } }
 </style>
 </head>
 <body>
@@ -239,15 +244,19 @@ main.events { align-self: start; }
   }
   function el(tag, cls, text) { var n = document.createElement(tag); n.className = cls; if (text) n.textContent = text; return n; }
   function item(e, past) {
-    var li = el("li", "event" + (past ? " past" : ""));
-    li.appendChild(el("p", "when", when(e)));
-    li.appendChild(el("h3", "title", e.title));
+    var li = el("li", "event");
+    var a = el("a", "card" + (e.cover_url ? " has-photo" : ""));
+    a.href = "/events/event/?e=" + encodeURIComponent(e.slug);
+    if (e.cover_url) { var img = el("img", ""); img.src = e.cover_url; img.alt = ""; img.loading = "lazy"; a.appendChild(img); }
+    var text = el("div", "");
+    text.appendChild(el("p", "when", when(e)));
+    text.appendChild(el("h3", "title", e.title));
     var where = [e.venue, e.city].filter(Boolean).join(", ");
-    if (where) li.appendChild(el("p", "where", where));
-    if (e.description) li.appendChild(el("p", "about", e.description));
-    if (e.link && /^https?:\/\//i.test(e.link)) {
-      var a = el("a", "rsvp", past ? "More" : "Details & RSVP"); a.href = e.link; a.rel = "noopener"; li.appendChild(a);
-    }
+    if (where) text.appendChild(el("p", "where", where));
+    if (e.description) text.appendChild(el("p", "about", e.description));
+    var hasMore = e.story || (e.photos && e.photos.length);
+    text.appendChild(el("span", "more", past ? (hasMore ? "Read the story" : "More") : "Details & RSVP"));
+    a.appendChild(text); li.appendChild(a);
     return li;
   }
   function fill(id, list, past, empty) {
@@ -263,12 +272,13 @@ main.events { align-self: start; }
     fill("upcoming", up, false, "Nothing announced yet. Write to hello@creativeendeavors.xyz to hear first.");
     fill("past", past, true, "Past events will appear here.");
   }
-  CE.get("ce_events?select=title,kind,starts_at,ends_at,venue,city,description,link&published=is.true&order=starts_at.asc")
+  CE.get("ce_events?select=slug,title,starts_at,ends_at,venue,city,description,cover_url,photos,story&published=is.true&order=starts_at.asc")
     .then(show)
-    .catch(function () {
-      fill("upcoming", [], false, "Events couldn\u2019t be loaded. Please try again shortly.");
-      fill("past", [], true, "");
-      document.getElementById("past").replaceChildren();
+    .catch(function (err) {
+      // 404: the events table isn't set up yet, so there's simply nothing to show.
+      var missing = err && err.message === "404";
+      fill("upcoming", [], false, missing ? "Nothing announced yet. Write to hello@creativeendeavors.xyz to hear first." : "Events couldn\u2019t be loaded. Please try again shortly.");
+      if (missing) fill("past", [], true, "Past events will appear here."); else document.getElementById("past").replaceChildren();
     });
   CE.applyContent();
 })();

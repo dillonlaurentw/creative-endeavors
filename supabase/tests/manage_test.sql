@@ -66,6 +66,14 @@ begin
   exception when invalid_parameter_value then null;
   end;
 
+  -- Every event gets a stable, unique web address.
+  assert (select slug from ce_events where id = e_pub) ~ '^opening-salon-\d{4}-\d{2}-\d{2}$', 'slug from title and date';
+  insert into ce_events (title, starts_at) select title, starts_at from ce_events where id = e_pub;
+  assert (select count(distinct slug) from ce_events where title = 'Opening Salon') = 2, 'slugs unique';
+  update ce_events set title = 'Renamed Salon' where id = e_pub;
+  assert (select slug from ce_events where id = e_pub) like 'opening-salon-%', 'slug kept when renamed';
+  update ce_events set title = 'Opening Salon' where id = e_pub;
+
   insert into ce_partners (name, published) values ('Public Partner', true), ('Hidden Partner', false);
   insert into ce_site_content (key, value) values ('home.lede', 'A think tank for creatives.');
   begin
