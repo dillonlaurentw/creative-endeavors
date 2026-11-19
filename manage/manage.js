@@ -136,8 +136,13 @@
       img.src = url;
     });
   }
-  function upload(file, folder) {
-    return shrink(file).then(function (blob) {
+  // Covers and logos keep the exact file that was chosen (only HEIC, which most
+  // browsers can't show, is converted). Gallery and chat photos are shrunk.
+  function original(file) {
+    return /heic|heif/i.test(file.type) || /\.(heic|heif)$/i.test(file.name) ? shrink(file) : Promise.resolve(file);
+  }
+  function upload(file, folder, exact) {
+    return (exact ? original(file) : shrink(file)).then(function (blob) {
       var ext = blob.type === "image/jpeg" ? "jpg" : (blob.type.split("/")[1] || "jpg");
       var path = folder + "/" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8) + "." + ext;
       return sb.storage.from(BUCKET).upload(path, blob, { contentType: blob.type || "image/jpeg", cacheControl: "31536000" }).then(function (r) {
@@ -157,11 +162,11 @@
     zone.addEventListener("drop", function (e) { e.preventDefault(); var f = [].filter.call(e.dataTransfer.files, function (x) { return /^image\//.test(x.type) || /\.(heic|heif)$/i.test(x.name); }); if (f.length) onFiles(multiple ? f : f.slice(0, 1)); });
     return h("div", null, zone, input);
   }
-  function uploadMany(files, folder, done) {
+  function uploadMany(files, folder, done, exact) {
     var n = 0;
     say("Uploading " + files.length + " photo" + (files.length === 1 ? "" : "s") + "…");
     return Promise.all(files.map(function (f) {
-      return upload(f, folder).then(function (u) { n++; say("Uploading… " + n + " of " + files.length); return u; }).catch(function (e) { console.error(e); return null; });
+      return upload(f, folder, exact).then(function (u) { n++; say("Uploading… " + n + " of " + files.length); return u; }).catch(function (e) { console.error(e); return null; });
     })).then(function (urls) {
       var ok = urls.filter(Boolean);
       if (ok.length === files.length) say("");
@@ -283,7 +288,7 @@
       coverBox.appendChild(pick);
     }
     var pick = dropzone("Add a cover photo", false, function (files) {
-      uploadMany(files, folder, function (urls) { if (urls[0]) { state.cover_url = urls[0]; drawCover(); dirty(); say("Photo added. Remember to save.", "ok"); } });
+      uploadMany(files, folder, function (urls) { if (urls[0]) { state.cover_url = urls[0]; drawCover(); dirty(); say("Photo added. Remember to save.", "ok"); } }, true);
     });
 
     // Gallery.
@@ -681,7 +686,7 @@
     var sort = h("input", { id: "pa-sort", type: "number", value: x ? x.sort : 0 });
     var shown = h("input", { id: "pa-pub", type: "checkbox", checked: x ? x.published : true });
     var logoRow = h("div", { class: "photo-row" });
-    var drop = dropzone("Add logo", false, function (f) { uploadMany(f, "partners", function (u) { if (u[0]) { state.logo_url = u[0]; drawLogo(); } }); });
+    var drop = dropzone("Add logo", false, function (f) { uploadMany(f, "partners", function (u) { if (u[0]) { state.logo_url = u[0]; drawLogo(); } }, true); });
     function drawLogo() { fill(logoRow, [state.logo_url ? h("img", { class: "avatar lg logo", src: state.logo_url, alt: "" }) : h("span", { class: "avatar lg logo", text: "Logo" }), drop]); }
     drawLogo();
     var form = h("form", { class: "fields", novalidate: true }, h("div", { class: "field wide" }, logoRow), fieldWrap("Name", name), fieldWrap("Website", url), fieldWrap("About them", desc, { wide: true }),

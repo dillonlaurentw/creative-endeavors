@@ -160,7 +160,8 @@ main.event-page { align-self: start; max-width: 44rem; }
 .back { display: inline-block; color: var(--muted); font-size: 14px; margin-bottom: 32px; }
 .when { margin: 0 0 8px; color: var(--muted); font-size: 15px; font-variant-numeric: tabular-nums; }
 .where { margin: 8px 0 0; color: var(--muted); }
-.cover { display: block; width: 100%; margin: 32px 0 0; border-radius: 4px; background: #f3f3f3; max-height: 70vh; object-fit: cover; }
+/* The cover is shown exactly as uploaded: its own shape, never cropped, stretched or enlarged. */
+.cover { display: block; width: auto; height: auto; max-width: 100%; margin: 32px 0 0; }
 .summary { margin: 32px 0 0; font-size: 19px; line-height: 1.45; text-wrap: pretty; }
 .story p { margin: 18px 0 0; text-wrap: pretty; }
 .cta { display: inline-block; margin-top: 32px; padding: 12px 22px; background: var(--fg); color: var(--bg); border-radius: 6px; font-weight: 500; }
