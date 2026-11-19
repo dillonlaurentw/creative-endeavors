@@ -794,7 +794,9 @@
   function callAssistant() {
     return sb.auth.getSession().then(function (s) {
       var token = s.data.session && s.data.session.access_token;
-      return fetch(FN_URL, { method: "POST", headers: { "Content-Type": "application/json", apikey: CE.key, Authorization: "Bearer " + token }, body: JSON.stringify({ messages: convo.messages }) });
+      return fetch(FN_URL, { method: "POST", headers: { "Content-Type": "application/json", apikey: CE.key, Authorization: "Bearer " + token }, body: JSON.stringify({ messages: convo.messages }) })
+        // A function that doesn't exist yet answers without the headers browsers need, so it shows up as a network error.
+        .catch(function () { throw new Error("The assistant isn’t switched on yet, or couldn’t be reached. To switch it on, follow “Switching on the assistant” in the README."); });
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {
         if (!r.ok) throw new Error(body.error || (r.status === 404 ? "The assistant isn’t switched on yet (its Supabase function hasn’t been deployed)." : "The assistant couldn’t be reached."));
