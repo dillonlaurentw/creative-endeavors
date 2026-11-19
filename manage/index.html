@@ -145,6 +145,16 @@ details.more[open] summary { color: var(--fg); }
 .ph figcaption { position: absolute; inset: auto 0 0 0; display: flex; justify-content: space-between; gap: 4px; padding: 6px; background: linear-gradient(transparent, rgba(0,0,0,0.55)); }
 .ph-btn, .ph-tag { border: 0; border-radius: 6px; background: rgba(255,255,255,0.92); color: var(--fg); font-size: 12px; padding: 3px 8px; cursor: pointer; }
 .ph-tag { background: var(--fg); color: var(--bg); cursor: default; }
+/* Reordering: number and arrows along the top; drag on a computer. */
+.ph { cursor: grab; }
+.ph.dragging { opacity: 0.4; }
+.ph.over { outline: 2px solid var(--fg); outline-offset: 2px; }
+.ph-top { position: absolute; inset: 0 0 auto 0; display: flex; justify-content: space-between; align-items: center; gap: 4px; padding: 6px; background: linear-gradient(rgba(0,0,0,0.45), transparent); }
+.ph-num { min-width: 22px; text-align: center; border-radius: 6px; background: rgba(255,255,255,0.92); color: var(--fg); font-size: 12px; padding: 3px 6px; }
+.ph-move { display: flex; gap: 4px; }
+.ph-move .ph-btn { padding: 3px 9px; }
+.ph-btn:disabled { opacity: 0.35; cursor: default; }
+.ph-btn, .ph-tag { white-space: nowrap; }
 .photo-row { display: flex; gap: 20px; align-items: center; }
 .photo-row > div { flex: 1; max-width: 260px; }
 .photo-row .link { margin-top: 8px; font-size: 14px; }
@@ -289,6 +299,6 @@ details.more[open] summary { color: var(--fg); }
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="/assets/ce.js?v=2"></script>
-<script src="/manage/manage.js?v=4"></script>
+<script src="/manage/manage.js?v=5"></script>
 </body>
 </html>

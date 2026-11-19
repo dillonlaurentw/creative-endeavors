@@ -301,12 +301,34 @@
         drawGallery(); dirty(); say(urls.length + " photo" + (urls.length === 1 ? "" : "s") + " added. Remember to save.", "ok");
       });
     });
+    // Photos appear on the event page in this order. Drag one onto another to move
+    // it there (computer), or use its arrows (any screen, including phones).
+    function movePhoto(from, to) {
+      if (to < 0 || to >= state.photos.length || from === to) return;
+      var u = state.photos.splice(from, 1)[0];
+      state.photos.splice(to, 0, u);
+      drawGallery(); dirty();
+    }
+    var dragFrom = null;
     function drawGallery() {
+      var n = state.photos.length;
       fill(gallery, state.photos.map(function (u, i) {
-        return h("figure", { class: "ph" }, h("img", { src: u, alt: "", loading: "lazy" }),
+        var fig = h("figure", { class: "ph", draggable: "true", title: "Drag to change the order" },
+          h("img", { src: u, alt: "", loading: "lazy", draggable: "false" }),
+          h("div", { class: "ph-top" },
+            h("span", { class: "ph-num", text: String(i + 1) }),
+            n > 1 ? h("span", { class: "ph-move" },
+              h("button", { type: "button", class: "ph-btn", text: "←", "aria-label": "Move photo " + (i + 1) + " earlier", disabled: i === 0, onclick: function () { movePhoto(i, i - 1); } }),
+              h("button", { type: "button", class: "ph-btn", text: "→", "aria-label": "Move photo " + (i + 1) + " later", disabled: i === n - 1, onclick: function () { movePhoto(i, i + 1); } })) : null),
           h("figcaption", null,
             state.cover_url === u ? h("span", { class: "ph-tag", text: "Cover" }) : h("button", { type: "button", class: "ph-btn", text: "Make cover", onclick: function () { state.cover_url = u; drawCover(); drawGallery(); dirty(); } }),
             h("button", { type: "button", class: "ph-btn", "aria-label": "Remove photo", text: "Remove", onclick: function () { state.photos.splice(i, 1); if (state.cover_url === u) state.cover_url = state.photos[0] || null; drawCover(); drawGallery(); dirty(); } })));
+        fig.addEventListener("dragstart", function (ev) { dragFrom = i; fig.classList.add("dragging"); ev.dataTransfer.effectAllowed = "move"; ev.dataTransfer.setData("text/plain", String(i)); });
+        fig.addEventListener("dragend", function () { dragFrom = null; fig.classList.remove("dragging"); });
+        fig.addEventListener("dragover", function (ev) { if (dragFrom === null) return; ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; fig.classList.add("over"); });
+        fig.addEventListener("dragleave", function () { fig.classList.remove("over"); });
+        fig.addEventListener("drop", function (ev) { ev.preventDefault(); fig.classList.remove("over"); if (dragFrom !== null) movePhoto(dragFrom, i); dragFrom = null; });
+        return fig;
       }));
     }
 
@@ -325,7 +347,8 @@
       h("div", { class: "field wide" }, h("span", { class: "label", text: "Cover photo" }), coverBox),
       fieldWrap("One-line summary", summary, { wide: true, help: "Shown in the list of events." }),
       h("div", { class: "field wide" }, storyLabel, story),
-      h("div", { class: "field wide" }, h("span", { class: "label", text: "Photos" }), gallery, galleryDrop),
+      h("div", { class: "field wide" }, h("span", { class: "label", text: "Photos" }),
+        h("p", { class: "help", text: "They appear on the event page in this order. Drag a photo to move it, or use its arrows." }), gallery, galleryDrop),
       linkField, more,
       h("div", { class: "actions sticky" }, saveBtn, pubBtn, unsaved, h("span", { class: "spacer" }),
         e && e.published ? h("a", { class: "link", href: eventUrl(e), target: "_blank", rel: "noopener", text: "View on website ↗" }) : null));

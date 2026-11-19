@@ -153,6 +153,16 @@ async function handle(route) {
   await p.waitForSelector('.cover img'); ok(true, 'cover photo uploaded and shown');
   await p.setInputFiles('.gallery + div input[type=file]', [photos[1], photos[2]]);
   await p.waitForFunction(() => document.querySelectorAll('.gallery .ph').length === 2); ok(true, 'two gallery photos uploaded');
+  // Reordering: arrows (any screen) and dragging (computer).
+  const order = () => p.$$eval('.gallery .ph img', imgs => imgs.map(i => i.src));
+  const before = await order();
+  ok(await p.isDisabled('[aria-label="Move photo 1 earlier"]') && await p.isDisabled('[aria-label="Move photo 2 later"]'), 'arrows disabled at the ends');
+  await p.click('[aria-label="Move photo 2 earlier"]');
+  let now = await order(); ok(now[0] === before[1] && now[1] === before[0], 'arrow moves a photo earlier');
+  await p.dragAndDrop('.gallery .ph:nth-child(2)', '.gallery .ph:nth-child(1)');
+  now = await order(); ok(now[0] === before[0] && now[1] === before[1], 'dragging a photo moves it');
+  await p.click('[aria-label="Move photo 1 later"]');
+  const wanted = await order(); ok(wanted[0] === before[1], 'arrow moves a photo later');
   const up = calls.filter(c => c.startsWith('UPLOAD'));
   const size = (c) => Number(c.split(' ')[2]);
   // The browser doesn't pass on the bytes of a file read straight from disk, so the
@@ -162,6 +172,7 @@ async function handle(route) {
   await p.click('.actions button:has-text("Save and put on the website")'); await statusHas('on the website now');
   const salon = db.ce_events[0];
   ok(salon.published && salon.photos.length === 2 && salon.cover_url && salon.story.includes('half six'), 'past event saved with story, cover, photos, published');
+  ok(salon.photos.map(u => u.split('/').pop()).join() === wanted.map(u => u.split('/').pop()).join(), 'photos saved in the order shown');
   await p.waitForSelector('.pill.live'); ok(await p.isVisible('text=View on website'), 'shows it is live with a link');
 
   // Who was there: names typed, new ones become people.
