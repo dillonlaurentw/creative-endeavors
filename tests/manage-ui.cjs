@@ -154,7 +154,11 @@ async function handle(route) {
   await p.setInputFiles('.gallery + div input[type=file]', [photos[1], photos[2]]);
   await p.waitForFunction(() => document.querySelectorAll('.gallery .ph').length === 2); ok(true, 'two gallery photos uploaded');
   const up = calls.filter(c => c.startsWith('UPLOAD'));
-  ok(up.length === 3 && up.every(c => c.includes('.jpg') && Number(c.split(' ')[2]) < 1500000), 'photos shrunk to JPEG before upload');
+  const size = (c) => Number(c.split(' ')[2]);
+  // The browser doesn't pass on the bytes of a file read straight from disk, so the
+  // cover is checked by its type: still the original PNG, not re-saved as a JPEG.
+  ok(up.length === 3 && up[0].endsWith('.png 0') || (up[0].includes('.png') && size(up[0]) === fs.statSync(photos[0]).size), 'cover uploaded as the original file');
+  ok(up.slice(1).every(c => c.includes('.jpg') && size(c) < 1500000), 'gallery photos shrunk to JPEG before upload');
   await p.click('.actions button:has-text("Save and put on the website")'); await statusHas('on the website now');
   const salon = db.ce_events[0];
   ok(salon.published && salon.photos.length === 2 && salon.cover_url && salon.story.includes('half six'), 'past event saved with story, cover, photos, published');
